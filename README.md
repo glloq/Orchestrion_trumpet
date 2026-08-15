@@ -220,7 +220,7 @@ Requirements: [PlatformIO](https://platformio.org/) 6.1 or newer.
 ```bash
 pio run                 # default environment (ESP32-S3)
 pio run -e esp32dev     # ESP32-WROOM-32
-pio test -e native      # 87 host unit tests, no board required
+pio test -e native      # 102 host unit tests, no board required
 ```
 
 The project uses the [pioarduino](https://github.com/pioarduino/platform-espressif32)

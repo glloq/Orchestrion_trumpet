@@ -252,8 +252,9 @@ as working:
 
 Criteria 5–8, 10, 11 and 20 depend on physical hardware and are validated on
 the bench, not by the host test suite. Everything the host *can* verify is
-verified: `pio test -e native` runs 87 tests over the configuration, MIDI,
-audio and valve logic.
+verified: `pio test -e native` runs 102 tests over the configuration, the MIDI
+parser and router, the sound engine driven end to end through MIDI, and the
+valve logic.
 
 ## Development rules
 
