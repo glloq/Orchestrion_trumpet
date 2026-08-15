@@ -100,13 +100,17 @@ void applyAmplifierDefaults(AmplifierType type, AmplifierConfig& out) {
 void SpeakerProfile::configure(const SpeakerConfig& cfg) {
     const SpeakerRow& r = rowFor(cfg.profile);
     copyString(name_, sizeof(name_), cfg.name[0] ? cfg.name : r.name);
-    impedance_ = cfg.impedanceOhm > 0.5f ? cfg.impedanceOhm : r.impedance;
-    ratedPower_ = cfg.powerRmsW > 0.1f ? cfg.powerRmsW : r.ratedPower;
+    // Only a value of zero means "not configured": any positive number the
+    // user typed is theirs to keep, including a deliberately tiny power limit.
+    // Falling back to the catalogue value above a threshold would silently
+    // hand a small driver far more power than it was told to accept.
+    impedance_ = cfg.impedanceOhm > 0.0f ? cfg.impedanceOhm : r.impedance;
+    ratedPower_ = cfg.powerRmsW > 0.0f ? cfg.powerRmsW : r.ratedPower;
     fMin_ = cfg.minFrequencyHz;
     fMax_ = cfg.maxFrequencyHz;
     hpf_ = cfg.recommendedHighPassHz > 0.0f ? cfg.recommendedHighPassHz : r.hpf;
     gainCorrection_ = cfg.gainCorrectionDb;
-    powerLimit_ = cfg.powerLimitW > 0.05f ? cfg.powerLimitW : r.powerLimit;
+    powerLimit_ = cfg.powerLimitW > 0.0f ? cfg.powerLimitW : r.powerLimit;
 
     eqCount_ = 0;
     for (uint8_t i = 0; i < kMaxEqBands; ++i) {

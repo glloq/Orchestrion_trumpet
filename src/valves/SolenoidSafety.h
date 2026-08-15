@@ -11,6 +11,13 @@
 //    * a hard maximum continuous ON time -> release + latched fault;
 //    * a long term duty cycle ceiling -> forced cooldown;
 //    * the guard keeps running even if MIDI stops arriving.
+//
+//  Note on time handling: every state is carried by an explicit boolean, never
+//  by a "0 means unset" timestamp.  Zero is a perfectly legal value of the
+//  millisecond clock - right after boot, and again every time the 32 bit
+//  counter wraps - and using it as a sentinel would silently disable the duty
+//  accounting at exactly those moments.  All the differences are computed on
+//  unsigned arithmetic so they stay correct across a wrap.
 // ============================================================================
 #pragma once
 
@@ -34,17 +41,19 @@ public:
     bool pressedRequested() const { return requested_; }
 
     SolenoidFault fault() const { return fault_; }
-    bool inCooldown() const { return cooldownUntilMs_ != 0; }
+    bool inCooldown() const { return cooldown_; }
     void clearFault() { fault_ = SolenoidFault::NONE; }
 
     // Rolling ON ratio over the observation window, 0..100.
     uint8_t measuredDutyPercent() const;
 
 private:
-    void energiseOff(uint32_t nowMs);
+    void startWindowIfNeeded(uint32_t nowMs);
+    void energise(uint32_t nowMs, uint8_t percent);
+    void deEnergise(uint32_t nowMs);
+    void trip(SolenoidFault fault, uint32_t nowMs);
 
     ValveConfig cfg_;
-    bool requested_ = false;
     uint32_t onSinceMs_ = 0;
     uint32_t lastUpdateMs_ = 0;
     uint32_t cooldownUntilMs_ = 0;
@@ -53,6 +62,10 @@ private:
     uint32_t windowLengthMs_ = 10000;
     uint8_t duty_ = 0;
     SolenoidFault fault_ = SolenoidFault::NONE;
+    bool requested_ = false;
+    bool energised_ = false;
+    bool cooldown_ = false;
+    bool windowStarted_ = false;
 };
 
 }  // namespace ot

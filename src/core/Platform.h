@@ -18,11 +18,17 @@
 #include <algorithm>
 #include <string>
 
-// Minimal stand-ins used by the host build.
+// Minimal stand-ins used by the host build.  The clock is driven by hand so a
+// solenoid timeout or a servo ramp can be verified in microseconds of test
+// time instead of seconds of real time.
 namespace ot {
-// Monotonic millisecond clock injected by the tests.
-uint32_t hostMillis();
-void hostSetMillis(uint32_t ms);
+inline uint32_t& hostMillisRef() {
+    static uint32_t value = 0;
+    return value;
+}
+inline uint32_t hostMillis() { return hostMillisRef(); }
+inline void hostSetMillis(uint32_t ms) { hostMillisRef() = ms; }
+inline void hostAdvanceMillis(uint32_t ms) { hostMillisRef() += ms; }
 }  // namespace ot
 
 #define OT_MILLIS() ::ot::hostMillis()

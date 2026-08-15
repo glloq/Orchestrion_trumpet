@@ -6,8 +6,7 @@
 //
 //    g++ -std=gnu++17 -DOT_HOST_BUILD=1 -I src -I <ArduinoJson>/src \
 //        tools/dump_default_config.cpp src/config/*.cpp src/audio/Profiles.cpp \
-//        src/audio/Limiter.cpp src/midi/MidiRouter.cpp test/support/HostClock.cpp \
-//        -o dump_default_config
+//        src/audio/Limiter.cpp src/midi/MidiRouter.cpp -o dump_default_config
 // ============================================================================
 #include <cstdio>
 #include <string>
