@@ -1,0 +1,18 @@
+# ESP32-WROOM-32, 4 MB flash.
+#
+# With BLE (Bluedroid), Wi-Fi, the web server and the WebSocket server the
+# firmware is ~2.0 MB, which does not leave room for two 2 MB OTA slots inside
+# 4 MB.  This layout therefore uses a single application partition; the
+# firmware detects the absence of a second OTA slot at runtime and the
+# Firmware page reports OTA as unavailable with that reason instead of
+# offering a button that cannot work.
+#
+# Use partitions/esp32_8mb_ota.csv (env:esp32dev_8mb) on a WROOM/WROVER module
+# with 8 MB or more to get over-the-air updates back.
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  factory, 0x10000,  0x2D0000,
+littlefs, data, spiffs,  0x2E0000, 0x110000,
+coredump, data, coredump,0x3F0000, 0x10000,
