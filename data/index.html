@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f4f6f9">
+<title>Orchestrion Trumpet</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎺</text></svg>">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="boot" class="boot">
+  <div>
+    <div class="boot-logo">🎺</div>
+    <div class="boot-title">Orchestrion Trumpet</div>
+    <div class="boot-sub" id="boot-sub">Connecting…</div>
+  </div>
+</div>
+
+<div class="app">
+  <aside class="side" id="side">
+    <div class="brand">
+      <div class="brand-mark">GMB</div>
+      <div>
+        <div class="brand-name">Orchestrion</div>
+        <div class="brand-sub">Trumpet</div>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button class="nav-item" data-view="play">
+        <span class="nav-ico">♪</span>Play
+      </button>
+      <button class="nav-item" data-view="configure">
+        <span class="nav-ico">⚙</span>Configure
+      </button>
+      <button class="nav-item" data-view="wiring">
+        <span class="nav-ico">⚡</span>Wiring
+      </button>
+    </nav>
+
+    <div class="side-foot">
+      <button class="stop-btn" id="btn-stop" title="Stop everything immediately">STOP</button>
+      <div class="side-meta">
+        <div id="meta-fw">firmware —</div>
+        <div id="meta-net">—</div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn burger" id="burger" aria-label="Menu">☰</button>
+      <h1 id="page-title">Play</h1>
+      <div class="topbar-right">
+        <span class="badge" id="badge-source">DEVICE</span>
+        <span class="badge keep" id="badge-mode">…</span>
+        <span class="badge" id="badge-link">Offline</span>
+        <button class="icon-btn" id="btn-settings" title="Settings">⚙</button>
+      </div>
+    </header>
+
+    <main class="view" id="view"></main>
+
+    <div class="savebar" id="savebar" hidden>
+      <span id="savebar-text">Unsaved changes</span>
+      <div class="btn-row">
+        <button class="btn" id="savebar-discard">Discard</button>
+        <button class="btn primary" id="savebar-save">Save configuration</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div class="toasts" id="toasts"></div>
+
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/ws.js"></script>
+<script src="js/trumpet.js"></script>
+<script src="js/keyboard.js"></script>
+<script src="js/wiring.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/wizard.js"></script>
+<script src="js/pages.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
