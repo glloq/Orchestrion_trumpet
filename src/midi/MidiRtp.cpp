@@ -173,7 +173,9 @@ void MidiRtpTransport::handleExchange(WiFiUDP& socket, const uint8_t* data, size
         }
 
         case kCmdEndSession:
-            if (length >= 16 && readU32(data + 12) == peerSsrc_) {
+            // Only the peer that owns the session may close it: a forged BY
+            // from anywhere on the network would otherwise cut the performance.
+            if (length >= 16 && readU32(data + 12) == peerSsrc_ && remoteIp == peerIp_) {
                 OT_LOGI("rtp", "session closed by \"%s\"", peerName_);
                 sessionActive_ = false;
                 controlAccepted_ = false;
@@ -183,7 +185,12 @@ void MidiRtpTransport::handleExchange(WiFiUDP& socket, const uint8_t* data, size
             break;
 
         case kCmdSynchronisation:
-            if (length >= 36 && !isControlPort) sendClockResponse(data, remoteIp, remotePort);
+            if (length < 36 || isControlPort) break;
+            if (sessionActive_ && remoteIp != peerIp_) {
+                ++rejectedSources_;
+                break;
+            }
+            sendClockResponse(data, remoteIp, remotePort);
             break;
 
         case kCmdReceiverFeedback:
@@ -258,7 +265,14 @@ void MidiRtpTransport::pollData() {
             if (readU16(buffer) == kSignature) {
                 handleExchange(data_, buffer, static_cast<size_t>(n), false);
             } else if (cfg_.inEnabled && sessionActive_) {
-                handleRtpPayload(buffer, static_cast<size_t>(n));
+                // Only the peer that opened the session may inject notes.
+                // Without this check any device on the same Wi-Fi could send a
+                // datagram to the data port and play the instrument.
+                if (data_.remoteIP() == peerIp_) {
+                    handleRtpPayload(buffer, static_cast<size_t>(n));
+                } else {
+                    ++rejectedSources_;
+                }
             }
         }
         size = data_.parsePacket();

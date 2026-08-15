@@ -97,12 +97,31 @@ bool MidiParser::parse(uint8_t byte, MidiMessage& out) {
             runningStatus_ = 0;
             return false;
         }
+        // A lone 0xF7 (End of Exclusive with no block open) and the undefined
+        // 0xF4 / 0xF5 are not messages.  Swallowing them - rather than latching
+        // them into `status_` - is what stops the next data byte producing a
+        // phantom message.
+        if (byte == 0xF7 || byte == 0xF4 || byte == 0xF5) {
+            status_ = 0;
+            runningStatus_ = 0;
+            pendingCount_ = 0;
+            expected_ = 0;
+            return false;
+        }
         status_ = byte;
         pendingCount_ = 0;
         expected_ = dataBytesFor(byte);
         // Running status only applies to channel messages.
         runningStatus_ = (byte < 0xF0) ? byte : 0;
-        if (expected_ == 0) return emit(out);
+        if (expected_ == 0) {
+            // Status-only system message (Tune Request).  It is complete right
+            // here, so the status must be dropped: leaving it armed would make
+            // the following data byte emit the very same message again.
+            const bool ok = emit(out);
+            status_ = 0;
+            expected_ = 0;
+            return ok;
+        }
         return false;
     }
 

@@ -64,7 +64,7 @@ void writeI2c(JsonObject o, const I2cPins& p) {
 
 }  // namespace
 
-void configToJson(const InstrumentConfiguration& cfg, JsonObject root) {
+void configToJson(const InstrumentConfiguration& cfg, JsonObject root, SecretPolicy secrets) {
     root["schemaVersion"] = cfg.schemaVersion;
 
     JsonObject board = root["board"].to<JsonObject>();
@@ -79,9 +79,14 @@ void configToJson(const InstrumentConfiguration& cfg, JsonObject root) {
     JsonObject wifi = root["wifi"].to<JsonObject>();
     wifi["mode"] = toString(cfg.wifi.mode);
     wifi["ssid"] = cfg.wifi.ssid;
-    wifi["password"] = cfg.wifi.password;
     wifi["apSsid"] = cfg.wifi.apSsid;
-    wifi["apPassword"] = cfg.wifi.apPassword;
+    // The UI needs to know whether a password exists, never what it is.
+    wifi["passwordSet"] = cfg.wifi.password[0] != '\0';
+    wifi["apPasswordSet"] = cfg.wifi.apPassword[0] != '\0';
+    if (secrets == SecretPolicy::INCLUDE) {
+        wifi["password"] = cfg.wifi.password;
+        wifi["apPassword"] = cfg.wifi.apPassword;
+    }
     wifi["hostname"] = cfg.wifi.hostname;
     wifi["apChannel"] = cfg.wifi.apChannel;
     wifi["captivePortal"] = cfg.wifi.captivePortal;
@@ -466,9 +471,19 @@ bool configFromJson(JsonObjectConst root, InstrumentConfiguration& cfg) {
     return true;
 }
 
-size_t serializeConfig(const InstrumentConfiguration& cfg, char* out, size_t outSize) {
+void preserveSecrets(InstrumentConfiguration& cfg, const InstrumentConfiguration& previous) {
+    if (cfg.wifi.password[0] == '\0') {
+        copyString(cfg.wifi.password, sizeof(cfg.wifi.password), previous.wifi.password);
+    }
+    if (cfg.wifi.apPassword[0] == '\0') {
+        copyString(cfg.wifi.apPassword, sizeof(cfg.wifi.apPassword), previous.wifi.apPassword);
+    }
+}
+
+size_t serializeConfig(const InstrumentConfiguration& cfg, char* out, size_t outSize,
+                       SecretPolicy secrets) {
     JsonDocument doc;
-    configToJson(cfg, doc.to<JsonObject>());
+    configToJson(cfg, doc.to<JsonObject>(), secrets);
     return serializeJson(doc, out, outSize);
 }
 

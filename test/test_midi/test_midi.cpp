@@ -107,6 +107,43 @@ void test_parser_ignores_orphan_data(void) {
     TEST_ASSERT_FALSE(parser.parse(100, msg));
 }
 
+void test_parser_ignores_a_stray_end_of_exclusive(void) {
+    MidiParser parser;
+    MidiMessage msg;
+    // 0xF7 with no 0xF0 open is not a message.  It must not be emitted, and it
+    // must not latch: the data bytes that follow have no status and are junk.
+    TEST_ASSERT_FALSE(parser.parse(0xF7, msg));
+    TEST_ASSERT_FALSE(parser.parse(60, msg));
+    TEST_ASSERT_FALSE(parser.parse(100, msg));
+
+    // ... and the parser still works afterwards.
+    parser.parse(0x90, msg);
+    parser.parse(64, msg);
+    TEST_ASSERT_TRUE(parser.parse(100, msg));
+    TEST_ASSERT_EQUAL(MidiType::NoteOn, msg.type);
+    TEST_ASSERT_EQUAL_UINT8(64, msg.data1);
+}
+
+void test_parser_status_only_message_does_not_repeat(void) {
+    MidiParser parser;
+    MidiMessage msg;
+    // Tune Request is complete on its own.
+    TEST_ASSERT_TRUE(parser.parse(0xF6, msg));
+    TEST_ASSERT_EQUAL(MidiType::TuneRequest, msg.type);
+    // A following data byte must not emit a second Tune Request.
+    TEST_ASSERT_FALSE(parser.parse(60, msg));
+    TEST_ASSERT_FALSE(parser.parse(100, msg));
+}
+
+void test_parser_undefined_system_bytes_are_ignored(void) {
+    MidiParser parser;
+    MidiMessage msg;
+    for (uint8_t status : {0xF4, 0xF5}) {
+        TEST_ASSERT_FALSE(parser.parse(status, msg));
+        TEST_ASSERT_FALSE(parser.parse(60, msg));
+    }
+}
+
 void test_message_serialisation_round_trip(void) {
     MidiParser parser;
     MidiMessage in = MidiMessage::noteOn(5, 72, 88);
@@ -373,6 +410,9 @@ int main(int, char**) {
     RUN_TEST(test_parser_two_byte_messages);
     RUN_TEST(test_parser_sysex);
     RUN_TEST(test_parser_ignores_orphan_data);
+    RUN_TEST(test_parser_ignores_a_stray_end_of_exclusive);
+    RUN_TEST(test_parser_status_only_message_does_not_repeat);
+    RUN_TEST(test_parser_undefined_system_bytes_are_ignored);
     RUN_TEST(test_message_serialisation_round_trip);
     RUN_TEST(test_pitch_bend_encoding);
     RUN_TEST(test_note_priority_last);

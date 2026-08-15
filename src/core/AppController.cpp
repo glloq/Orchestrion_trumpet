@@ -326,10 +326,51 @@ void AppController::actuatorTask() {
 #endif
 }
 
+void AppController::forceHotspot() {
+    wifi_.forceAccessPoint();
+    // The portal follows the hotspot: a phone that joins lands on the config
+    // page by itself, which is the whole point of the escape hatch.
+    if (config_.config().wifi.captivePortal) portal_.begin();
+}
+
+void AppController::pollBootButton(uint32_t nowMs) {
+#if !defined(OT_HOST_BUILD)
+    // GPIO0 is the BOOT button on both reference dev boards.  It is a strapping
+    // pin, sampled only at reset, so reading it afterwards is free and safe.
+    constexpr uint8_t kBootButtonPin = 0;
+    constexpr uint32_t kHoldMs = 2000;
+    static bool configured = false;
+    if (!configured) {
+        pinMode(kBootButtonPin, INPUT_PULLUP);
+        configured = true;
+    }
+
+    const bool pressed = digitalRead(kBootButtonPin) == LOW;
+    if (!pressed) {
+        bootButtonHeldSinceMs_ = 0;
+        bootButtonLatched_ = false;
+        return;
+    }
+    if (bootButtonHeldSinceMs_ == 0) {
+        bootButtonHeldSinceMs_ = nowMs;
+        return;
+    }
+    if (!bootButtonLatched_ && (nowMs - bootButtonHeldSinceMs_) >= kHoldMs) {
+        bootButtonLatched_ = true;   // one action per press, not one per poll
+        OT_LOGW("wifi", "BOOT button held: raising the hotspot");
+        forceHotspot();
+    }
+#else
+    (void)nowMs;
+#endif
+}
+
 void AppController::networkTask() {
 #if !defined(OT_HOST_BUILD)
     bool rtpStarted = false;
     while (true) {
+        const uint32_t now = millis();
+        pollBootButton(now);
         wifi_.loop();
         portal_.loop();
         webServer().loop();

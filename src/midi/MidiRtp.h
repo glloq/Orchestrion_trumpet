@@ -42,6 +42,10 @@ public:
 
     const char* peerName() const { return peerName_; }
     uint32_t ssrc() const { return ssrc_; }
+    // Datagrams refused because they did not come from the session peer.  A
+    // rogue device on the same network is meant to show up here rather than in
+    // the note stream.
+    uint32_t rejectedSources() const { return rejectedSources_; }
 
 private:
 #if !defined(OT_HOST_BUILD)
@@ -67,6 +71,7 @@ private:
     uint32_t ssrc_ = 0;
     uint32_t peerSsrc_ = 0;
     uint16_t sequence_ = 0;
+    uint32_t rejectedSources_ = 0;
     bool started_ = false;
     bool sessionActive_ = false;
     bool controlAccepted_ = false;

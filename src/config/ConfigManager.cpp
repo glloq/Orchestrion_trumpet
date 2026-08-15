@@ -175,7 +175,8 @@ bool ConfigManager::save() {
     if (!mounted_) return false;
 
     static char buffer[kJsonCapacity];
-    const size_t length = serializeConfig(config_, buffer, sizeof(buffer));
+    const size_t length =
+        serializeConfig(config_, buffer, sizeof(buffer), SecretPolicy::INCLUDE);
     if (length == 0 || length >= sizeof(buffer) - 1) {
         OT_LOGE("config", "serialisation overflowed the %u byte buffer",
                 static_cast<unsigned>(sizeof(buffer)));
@@ -216,6 +217,9 @@ bool ConfigManager::applyAndSave(const InstrumentConfiguration& candidate,
     InstrumentConfiguration next = candidate;
     next.schemaVersion = kConfigSchemaVersion;
     next.board = boardCaps().board;
+    // The candidate came back from the web UI with redacted passwords; saving
+    // it must not wipe the credentials already stored on the device.
+    preserveSecrets(next, config_);
     ConfigValidator::sanitise(next, boardCaps());
     ConfigValidator::validate(next, report);
     if (report.hasErrors()) return false;
@@ -224,8 +228,18 @@ bool ConfigManager::applyAndSave(const InstrumentConfiguration& candidate,
     return save();
 }
 
+bool ConfigManager::setWifiCredentials(const char* stationPassword, const char* apPassword) {
+    if (stationPassword) {
+        copyString(config_.wifi.password, sizeof(config_.wifi.password), stationPassword);
+    }
+    if (apPassword) {
+        copyString(config_.wifi.apPassword, sizeof(config_.wifi.apPassword), apPassword);
+    }
+    return save();
+}
+
 size_t ConfigManager::exportJson(char* out, size_t outSize) const {
-    return serializeConfig(config_, out, outSize);
+    return serializeConfig(config_, out, outSize, SecretPolicy::REDACT);
 }
 
 bool ConfigManager::importJson(const char* json, size_t length, ValidationReport& report) {

@@ -149,6 +149,9 @@ void HttpServerModule::registerRoutes() {
     bind("/api/valve/mode", HTTP_POST, &HttpServerModule::handleValveMode);
     bind("/api/valve/manual", HTTP_POST, &HttpServerModule::handleValveManual);
     bind("/api/valve/calibrate", HTTP_POST, &HttpServerModule::handleValveCalibrate);
+    bind("/api/wifi/scan", HTTP_GET, &HttpServerModule::handleWifiScan);
+    bind("/api/wifi/hotspot", HTTP_POST, &HttpServerModule::handleWifiHotspot);
+    bind("/api/wifi/credentials", HTTP_POST, &HttpServerModule::handleWifiCredentials);
     bind("/api/midi/status", HTTP_GET, &HttpServerModule::handleMidiStatus);
     bind("/api/midi/monitor", HTTP_GET, &HttpServerModule::handleMidiMonitor);
     bind("/api/fingering", HTTP_GET, &HttpServerModule::handleGetFingering);
@@ -270,6 +273,9 @@ void HttpServerModule::handleStatus() {
     net["hostname"] = app_->wifi().hostname();
     net["rssi"] = s.wifiRssi;
     net["clients"] = s.webClients;
+    net["apSecured"] = app_->wifi().accessPointSecured();
+    net["apForced"] = app_->wifi().accessPointForced();
+    net["mdns"] = app_->wifi().mdnsStarted();
 
     doc["otaAvailable"] = otaAvailable();
     doc["faults"] = s.faultMask;
@@ -320,6 +326,7 @@ void HttpServerModule::handleDiagnostics() {
     JsonObject router = doc["router"].to<JsonObject>();
     router["droppedByFilter"] = stats.droppedByFilter;
     router["loopsSuppressed"] = stats.loopsSuppressed;
+    router["rtpRejectedSources"] = app_->rtpMidi().rejectedSources();
 
     JsonArray valves = doc["valves"].to<JsonArray>();
     for (uint8_t i = 0; i < app_->valves().valveCount(); ++i) {
@@ -674,6 +681,89 @@ void HttpServerModule::handleValveCalibrate() {
 }
 
 // ---------------------------------------------------------------------------
+// Wi-Fi
+// ---------------------------------------------------------------------------
+void HttpServerModule::handleWifiScan() {
+    WifiManager& wifi = app_->wifi();
+    // Polled: the first call kicks the scan off, later ones collect it.  The
+    // browser shows a spinner in between instead of the request hanging.
+    if (!wifi.scanInProgress() && g_http->arg("refresh") == "1") wifi.startScan();
+    if (!wifi.scanInProgress() && wifi.scanResultCount() == 0) wifi.startScan();
+
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["scanning"] = wifi.scanInProgress();
+    doc["generation"] = wifi.scanGeneration();
+    JsonArray networks = doc["networks"].to<JsonArray>();
+    for (uint8_t i = 0; i < wifi.scanResultCount(); ++i) {
+        const WifiScanEntry& e = wifi.scanResult(i);
+        JsonObject o = networks.add<JsonObject>();
+        o["ssid"] = e.ssid;
+        o["rssi"] = e.rssi;
+        o["channel"] = e.channel;
+        o["secured"] = e.secured;
+    }
+    const size_t n = serializeJson(doc, g_buffer, sizeof(g_buffer));
+    sendJson(200, g_buffer, n);
+}
+
+void HttpServerModule::handleWifiHotspot() {
+    app_->forceHotspot();
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["ssid"] = app_->wifi().apSsid();
+    // The hotspot takes a moment to appear; the UI says so rather than
+    // pretending the network is already there.
+    doc["note"] = "the hotspot appears within a few seconds";
+    const size_t n = serializeJson(doc, g_buffer, sizeof(g_buffer));
+    sendJson(200, g_buffer, n);
+}
+
+void HttpServerModule::handleWifiCredentials() {
+    JsonDocument doc;
+    if (deserializeJson(doc, g_http->arg("plain")) != DeserializationError::Ok) {
+        sendError(400, "expected {\"password\":\"...\",\"apPassword\":\"...\"}");
+        return;
+    }
+
+    // Passwords never travel in the ordinary configuration document, so this is
+    // the only way in - and only in.  They are never read back out.
+    const char* station = doc["password"].is<const char*>() ? doc["password"] : nullptr;
+    const char* ap = doc["apPassword"].is<const char*>() ? doc["apPassword"] : nullptr;
+
+    if (ap && ap[0] != '\0' && strlen(ap) < 8) {
+        sendError(400, "a hotspot password must be at least 8 characters, or empty for an open network");
+        return;
+    }
+
+    InstrumentConfiguration next = app_->config();
+    const char* ssid = doc["ssid"].is<const char*>() ? doc["ssid"] : nullptr;
+    if (ssid) copyString(next.wifi.ssid, sizeof(next.wifi.ssid), ssid);
+    if (doc["mode"].is<const char*>()) {
+        WifiMode mode;
+        if (parseEnum(doc["mode"], mode)) next.wifi.mode = mode;
+    }
+
+    ValidationReport report;
+    if (ssid || doc["mode"].is<const char*>()) {
+        if (!app_->applyConfiguration(next, report)) {
+            sendError(422, report.count() ? report.issue(0).message : "refused");
+            return;
+        }
+    }
+    if (!app_->configManager().setWifiCredentials(station, ap)) {
+        sendError(500, "could not store the credentials");
+        return;
+    }
+
+    JsonDocument out;
+    out["ok"] = true;
+    out["rebootRequired"] = true;
+    const size_t n = serializeJson(out, g_buffer, sizeof(g_buffer));
+    sendJson(200, g_buffer, n);
+}
+
+// ---------------------------------------------------------------------------
 // MIDI
 // ---------------------------------------------------------------------------
 void HttpServerModule::handleMidiStatus() {
@@ -903,6 +993,9 @@ void HttpServerModule::handleValveTest() {}
 void HttpServerModule::handleValveMode() {}
 void HttpServerModule::handleValveManual() {}
 void HttpServerModule::handleValveCalibrate() {}
+void HttpServerModule::handleWifiScan() {}
+void HttpServerModule::handleWifiHotspot() {}
+void HttpServerModule::handleWifiCredentials() {}
 void HttpServerModule::handleMidiStatus() {}
 void HttpServerModule::handleMidiMonitor() {}
 void HttpServerModule::handleExport() {}

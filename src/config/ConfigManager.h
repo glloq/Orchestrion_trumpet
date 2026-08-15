@@ -38,8 +38,13 @@ public:
     // stored configuration is left untouched and `report` explains why.
     bool applyAndSave(const InstrumentConfiguration& candidate, ValidationReport& report);
 
-    // Import/export used by the REST API.  `import` goes through exactly the
-    // same validation as a normal save.
+    // Sets the Wi-Fi credentials, which never travel through the ordinary
+    // configuration document.  An empty string clears the corresponding one.
+    bool setWifiCredentials(const char* stationPassword, const char* apPassword);
+
+    // Import/export used by the REST API.  Both are redacted: an exported file
+    // can be shared without leaking the owner's network credentials.  `import`
+    // goes through exactly the same validation as a normal save.
     size_t exportJson(char* out, size_t outSize) const;
     bool importJson(const char* json, size_t length, ValidationReport& report);
 

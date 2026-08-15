@@ -39,6 +39,9 @@ private:
     void handleValveMode();
     void handleValveManual();
     void handleValveCalibrate();
+    void handleWifiScan();
+    void handleWifiHotspot();
+    void handleWifiCredentials();
     void handleMidiStatus();
     void handleMidiMonitor();
     void handleExport();

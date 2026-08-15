@@ -7,6 +7,7 @@
 #include "config/ConfigManager.h"
 #include "config/ConfigMigration.h"
 #include "config/ConfigSerializer.h"
+#include <cstring>
 #include "config/ConfigValidator.h"
 #include "config/Presets.h"
 
@@ -128,6 +129,63 @@ void test_garbage_is_rejected(void) {
     TEST_ASSERT_FALSE(deserializeConfig("not json at all", 15, cfg));
     // Valid JSON but no schema version: not a configuration.
     TEST_ASSERT_FALSE(deserializeConfig("{\"audio\":{}}", 11, cfg));
+}
+
+// ---------------------------------------------------------------------------
+// Secrets
+// ---------------------------------------------------------------------------
+void test_wifi_passwords_never_leave_the_device(void) {
+    InstrumentConfiguration cfg;
+    ConfigManager::makeDefaults(cfg);
+    copyString(cfg.wifi.ssid, sizeof(cfg.wifi.ssid), "HomeNetwork");
+    copyString(cfg.wifi.password, sizeof(cfg.wifi.password), "s3cr3t-passphrase");
+    copyString(cfg.wifi.apPassword, sizeof(cfg.wifi.apPassword), "hotspot-pass");
+
+    static char buffer[8192];
+    // What the REST API and the export file carry.
+    const size_t redacted = serializeConfig(cfg, buffer, sizeof(buffer), SecretPolicy::REDACT);
+    TEST_ASSERT_GREATER_THAN(200, redacted);
+    TEST_ASSERT_NULL(strstr(buffer, "s3cr3t-passphrase"));
+    TEST_ASSERT_NULL(strstr(buffer, "hotspot-pass"));
+    // The SSID is not a secret, and the UI needs to know a password exists.
+    TEST_ASSERT_NOT_NULL(strstr(buffer, "HomeNetwork"));
+    TEST_ASSERT_NOT_NULL(strstr(buffer, "passwordSet"));
+
+    // What the on-device store keeps.
+    const size_t full = serializeConfig(cfg, buffer, sizeof(buffer), SecretPolicy::INCLUDE);
+    TEST_ASSERT_GREATER_THAN(redacted, full);
+    TEST_ASSERT_NOT_NULL(strstr(buffer, "s3cr3t-passphrase"));
+    TEST_ASSERT_NOT_NULL(strstr(buffer, "hotspot-pass"));
+}
+
+void test_saving_a_redacted_document_keeps_the_stored_passwords(void) {
+    InstrumentConfiguration stored;
+    ConfigManager::makeDefaults(stored);
+    copyString(stored.wifi.password, sizeof(stored.wifi.password), "s3cr3t-passphrase");
+    copyString(stored.wifi.apPassword, sizeof(stored.wifi.apPassword), "hotspot-pass");
+
+    // Round trip through the redacted form, exactly as the web UI does.
+    static char buffer[8192];
+    const size_t n = serializeConfig(stored, buffer, sizeof(buffer), SecretPolicy::REDACT);
+    InstrumentConfiguration fromBrowser;
+    TEST_ASSERT_TRUE(deserializeConfig(buffer, n, fromBrowser));
+    TEST_ASSERT_EQUAL_STRING("", fromBrowser.wifi.password);
+
+    // Saving it must not wipe the credentials already on the device.
+    preserveSecrets(fromBrowser, stored);
+    TEST_ASSERT_EQUAL_STRING("s3cr3t-passphrase", fromBrowser.wifi.password);
+    TEST_ASSERT_EQUAL_STRING("hotspot-pass", fromBrowser.wifi.apPassword);
+}
+
+void test_an_explicit_password_still_wins(void) {
+    InstrumentConfiguration stored;
+    ConfigManager::makeDefaults(stored);
+    copyString(stored.wifi.password, sizeof(stored.wifi.password), "old-password");
+
+    InstrumentConfiguration incoming = stored;
+    copyString(incoming.wifi.password, sizeof(incoming.wifi.password), "new-password");
+    preserveSecrets(incoming, stored);
+    TEST_ASSERT_EQUAL_STRING("new-password", incoming.wifi.password);
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +412,9 @@ int main(int, char**) {
     RUN_TEST(test_missing_fields_keep_their_default);
     RUN_TEST(test_unknown_fields_are_ignored);
     RUN_TEST(test_garbage_is_rejected);
+    RUN_TEST(test_wifi_passwords_never_leave_the_device);
+    RUN_TEST(test_saving_a_redacted_document_keeps_the_stored_passwords);
+    RUN_TEST(test_an_explicit_password_still_wins);
     RUN_TEST(test_migration_v1_creates_routes);
     RUN_TEST(test_migration_is_idempotent);
     RUN_TEST(test_migration_refuses_a_newer_schema);

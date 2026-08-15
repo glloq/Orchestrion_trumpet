@@ -51,6 +51,9 @@ public:
     void reboot(uint32_t delayMs);
     bool applyConfiguration(const InstrumentConfiguration& candidate, ValidationReport& report);
     bool factoryReset();
+    // Brings the hotspot up on demand (web UI, or the board's BOOT button) and
+    // starts the captive portal with it.
+    void forceHotspot();
 
     // ---- accessors used by the web layer --------------------------------
     ConfigManager& configManager() { return config_; }
@@ -91,6 +94,10 @@ private:
     void midiTask();
     void actuatorTask();
     void networkTask();
+    // Escape hatch: holding the board's BOOT button raises the hotspot even
+    // when the stored station credentials are wrong and the user cannot reach
+    // the web UI any other way.
+    void pollBootButton(uint32_t nowMs);
 
     ConfigManager config_;
     MidiRouter router_;
@@ -117,6 +124,8 @@ private:
     uint32_t rebootAtMs_ = 0;
     uint32_t lastMidiRx_ = 0;
     uint32_t lastMidiTx_ = 0;
+    uint32_t bootButtonHeldSinceMs_ = 0;
+    bool bootButtonLatched_ = false;
     bool tasksStarted_ = false;
     volatile bool audioRunning_ = false;
 };
