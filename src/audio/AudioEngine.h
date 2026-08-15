@@ -74,6 +74,8 @@ public:
     bool testSignalActive() const { return testSignal_ != TestSignal::NONE; }
 
     AudioEngineStatus status() const;
+    // Pitch actually being produced, in fractional MIDI note units.
+    float livePitch() const { return livePitch_; }
     float safePeakScale() const { return limiter_.peakScale(); }
     uint32_t sampleRate() const { return sampleRate_; }
 
@@ -108,6 +110,7 @@ private:
 
     // ---- live state (audio task) -------------------------------------------
     float currentPitch_ = 60.0f;   // in MIDI note units, fractional
+    float livePitch_ = 60.0f;      // currentPitch_ + bend + vibrato
     float targetPitch_ = 60.0f;
     float portamentoCoef_ = 0.0f;
     float smoothedAmplitude_ = 0.0f;

@@ -30,7 +30,11 @@ void AudioEngine::configure(const AudioConfig& audio, const SpeakerConfig& speak
     if (cfg_.engine == SynthEngineType::SINE) additiveCfg.harmonicCount = 1;
     additive_.configure(additiveCfg, sampleRate_);
     wavetable_.configure(cfg_.additive, sampleRate_);
-    vibratoLfo_.setSampleRate(sampleRate_);
+    // The LFO is advanced once per control block, not once per sample, so it
+    // must run on the control rate clock.  Handing it the audio sample rate
+    // would divide the vibrato frequency by kControlDivider - a 5.5 Hz setting
+    // would come out at 0.17 Hz.
+    vibratoLfo_.setSampleRate(sampleRate_ / kControlDivider);
     vibratoLfo_.setFrequency(cfg_.vibrato.frequencyHz);
     testOsc_.setSampleRate(sampleRate_);
 
@@ -256,6 +260,9 @@ void AudioEngine::updateControlRate() {
 
     const float pitch = currentPitch_ + bendSemitones + vibrato;
     const float frequency = noteToFrequency(pitch);
+    // Reported as the "current frequency": what is really being produced,
+    // pitch bend and vibrato included, not just the note that was pressed.
+    livePitch_ = pitch;
 
     // ---- timbre -----------------------------------------------------------
     const float blow = blowAmount();
@@ -423,7 +430,8 @@ AudioEngineStatus AudioEngine::status() const {
     s.noteActive = notes_.hasNote();
     s.note = notes_.hasNote() ? notes_.activeNote() : 0;
     s.velocity = currentVelocity_;
-    s.frequencyHz = notes_.hasNote() || envelope_.isActive() ? noteToFrequency(currentPitch_) : 0.0f;
+    s.frequencyHz =
+        notes_.hasNote() || envelope_.isActive() ? noteToFrequency(livePitch_) : 0.0f;
     s.envelope = envelope_.value();
     s.peakLevel = peakLevel_;
     s.gainReduction = limiter_.gainReduction();
