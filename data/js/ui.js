@@ -1,6 +1,6 @@
 /* ===========================================================================
-   ui.js - DOM helpers and the small component vocabulary used by every page:
-   cards, toggles, dropdowns, sliders and status badges.
+   ui.js — DOM helpers and the component vocabulary every page is built from:
+   cards, toggles, dropdowns, sliders, status badges and disclosures.
    =========================================================================== */
 'use strict';
 
@@ -27,34 +27,46 @@ const UI = (() => {
     return node;
   }
 
+  const svg = (tag, attrs, children) => {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (value === null || value === undefined || value === false) continue;
+      if (key.startsWith('on') && typeof value === 'function') {
+        node.addEventListener(key.slice(2).toLowerCase(), value);
+      } else if (key === 'text') node.textContent = value;
+      else node.setAttribute(key, value);
+    }
+    for (const child of [].concat(children || [])) {
+      if (child) node.appendChild(child);
+    }
+    return node;
+  };
+
   const clear = (node) => { while (node.firstChild) node.removeChild(node.firstChild); };
 
-  function card(title, body, headExtra) {
+  function card(title, body, note) {
     const head = title
-      ? el('div', { class: 'card-head' }, [el('h2', { text: title }), headExtra || null])
+      ? el('div', { class: 'card-head' },
+           [el('h2', { text: title }),
+            note ? (typeof note === 'string' ? el('span', { class: 'card-note', text: note }) : note)
+                 : null])
       : null;
     return el('div', { class: 'card' }, [head].concat(body || []));
   }
 
-  function stat(label, value, unit) {
-    return el('div', { class: 'stat' }, [
-      el('span', { class: 'k', text: label }),
-      el('span', { class: 'v', text: value }),
-      unit ? el('span', { class: 'u', text: unit }) : null
-    ]);
-  }
+  const stat = (label, value, unit) => el('div', { class: 'stat' }, [
+    el('div', { class: 'k', text: label }),
+    el('div', { class: 'v', text: value }),
+    unit ? el('div', { class: 'u', text: unit }) : null
+  ]);
 
-  function badge(text, tone) {
-    return el('span', { class: 'badge', 'data-tone': tone || 'neutral', text });
-  }
+  const badge = (text, tone) => el('span', { class: 'badge ' + (tone || ''), text });
 
-  function field(label, control, hint) {
-    return el('div', { class: 'field' }, [
-      label ? el('label', { text: label }) : null,
-      control,
-      hint ? el('div', { class: 'hint', text: hint }) : null
-    ]);
-  }
+  const field = (label, control, help) => el('div', { class: 'field' }, [
+    label ? el('label', { text: label }) : null,
+    control,
+    help ? el('div', { class: 'help', text: help }) : null
+  ]);
 
   function select(options, value, onChange) {
     const node = el('select', { onchange: (e) => onChange(e.target.value) });
@@ -88,9 +100,11 @@ const UI = (() => {
       type: o.password ? 'password' : 'text',
       value: value || '',
       maxlength: o.maxlength || null,
-      placeholder: o.placeholder || null
+      placeholder: o.placeholder || null,
+      autocomplete: o.password ? 'new-password' : 'off'
     });
     node.addEventListener('change', () => onChange(node.value));
+    if (o.oninput) node.addEventListener('input', () => o.oninput(node.value));
     return node;
   }
 
@@ -122,13 +136,13 @@ const UI = (() => {
   function table(headers, rows) {
     const thead = el('thead', {}, [
       el('tr', {}, headers.map((h) =>
-        el('th', { class: h.num ? 'num' : null, text: h.label !== undefined ? h.label : h })))
+        el('th', { class: h && h.num ? 'num' : null,
+                   text: h && h.label !== undefined ? h.label : h })))
     ]);
     const tbody = el('tbody', {}, rows.map((cells) =>
       el('tr', {}, cells.map((c) =>
-        typeof c === 'object' && c !== null && c.nodeType
-          ? el('td', {}, [c])
-          : el('td', { text: c === null || c === undefined ? '—' : String(c) })))));
+        c && c.nodeType ? el('td', {}, [c])
+                        : el('td', { text: c === null || c === undefined ? '—' : String(c) })))));
     return el('div', { class: 'table-wrap' }, [el('table', {}, [thead, tbody])]);
   }
 
@@ -139,32 +153,71 @@ const UI = (() => {
         el('span', { class: 'tag', text: i.severity }),
         el('div', {}, [
           el('div', { text: i.message }),
-          i.field ? el('div', { class: 'field-name', text: i.field }) : null
+          i.field ? el('div', { class: 'fieldname', text: i.field }) : null
         ])
       ])));
   }
 
-  let toastTimer = 0;
+  // Progressive disclosure: everything rare or dangerous folds away by default.
+  function disclosure(label, buildBody, openByDefault) {
+    const body = el('div', { class: 'disclosure-body' });
+    let built = false;
+    const button = el('button', {
+      class: 'disclosure-toggle', type: 'button', 'aria-expanded': 'false', text: label
+    });
+    const setOpen = (open) => {
+      button.setAttribute('aria-expanded', open ? 'true' : 'false');
+      body.hidden = !open;
+      if (open && !built) { built = true; body.appendChild(buildBody()); }
+    };
+    button.addEventListener('click', () =>
+      setOpen(button.getAttribute('aria-expanded') !== 'true'));
+    const wrap = el('div', { class: 'disclosure' }, [button, body]);
+    setOpen(!!openByDefault);
+    wrap.open = () => setOpen(true);
+    return wrap;
+  }
+
+  const readout = (key, value, action) => el('div', { class: 'readout' }, [
+    el('span', { class: 'k', text: key }),
+    typeof value === 'string' ? el('span', { class: 'v', text: value }) : value,
+    action || null
+  ]);
+
   function toast(message, tone) {
     const host = document.getElementById('toasts');
-    const node = el('div', { class: 'toast', 'data-tone': tone || 'info', text: message });
+    const node = el('div', { class: 'toast ' + (tone || 'info'), text: message });
     host.appendChild(node);
     window.setTimeout(() => {
       node.style.opacity = '0';
       window.setTimeout(() => node.remove(), 250);
     }, tone === 'bad' ? 7000 : 3500);
-    toastTimer++;
   }
 
   const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const noteName = (n) => NOTE_NAMES[((n % 12) + 12) % 12] + (Math.floor(n / 12) - 1);
 
-  function stars(value) {
+  const stars = (value) => {
     const full = Math.floor(value / 2);
     const half = value % 2 === 1;
     return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(Math.max(0, 5 - full - (half ? 1 : 0)));
+  };
+
+  function uptime(seconds) {
+    const s = seconds | 0;
+    const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600);
+    const m = Math.floor(s % 3600 / 60), sec = s % 60;
+    if (d) return d + 'd ' + h + 'h';
+    if (h) return h + 'h ' + m + 'm';
+    if (m) return m + 'm ' + sec + 's';
+    return sec + 's';
   }
 
-  return { el, clear, card, stat, badge, field, select, number, text, toggle, slider,
-           table, issues, toast, noteName, stars };
+  const kv = (rows) => el('dl', { class: 'kv' }, rows.flatMap(([k, v]) => [
+    el('dt', { text: k }),
+    v && v.nodeType ? el('dd', {}, [v]) : el('dd', { text: String(v) })
+  ]));
+
+  return { el, svg, clear, card, stat, badge, field, select, number, text, toggle, slider,
+           table, issues, disclosure, readout, toast, noteName, stars, uptime, kv };
 })();

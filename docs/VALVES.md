@@ -77,9 +77,11 @@ call wrong. Every note can still be given one by hand from the web UI.
 
 ### Editing
 
-The Instrument page shows the whole table with a circle per valve. Click to
-toggle, then **Save to the instrument**. Export and import are JSON, and
-**Reset to default** restores the chart above.
+**Configure → Fingering table** shows the whole chart with a circle per valve.
+Click to toggle, then **Save to the instrument**. Export and import are JSON,
+and **Reset to default** restores the chart above.
+
+![Fingering table](../img/screenshots/configure-fingering.png)
 
 > The table lives in RAM and is rebuilt from the defaults at every boot. The
 > API response carries `"persisted": false` and the UI repeats it; persisting

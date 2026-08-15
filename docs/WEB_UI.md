@@ -19,30 +19,69 @@ If the configured network cannot be joined within 12 seconds the firmware
 falls back to the hotspot automatically, and keeps retrying the network in the
 background. You are never locked out.
 
-## Pages
+Three more ways back in, in order of how little you need to remember:
 
-```
-Dashboard   Play   MIDI   Instrument   Audio   Pistons
-Hardware    Calibration   Diagnostics   Advanced   Firmware
-                    Setup wizard
-```
+* **Hold the board's BOOT button (GPIO 0) for about two seconds.** The station
+  is abandoned and the hotspot comes up immediately. This is the way back in
+  when the stored credentials are simply wrong and mDNS never appears.
+* **Settings → Device → “Start the hotspot now”** (`POST /api/wifi/hotspot`),
+  when you can still reach the page.
+* Erase the credentials with a factory reset.
 
-The everyday pages never mention a GPIO or an I²S clock. Everything rare or
-dangerous lives on **Advanced**.
+The Wi-Fi passwords are stored on the device and are **never** included in an
+exported configuration: `GET /api/config` and `/api/config/export` report
+`wifi.passwordSet` / `wifi.apPasswordSet` booleans instead of the secrets, and
+a `PUT` that carries no password keeps the stored one. Sharing a config file
+therefore cannot leak your network password. Credentials are set through their
+own endpoint, `POST /api/wifi/credentials`.
 
-| Page | What it is for |
+An AP password of 1–7 characters is refused rather than silently ignored: WPA2
+needs eight. Leaving it empty deliberately opens the hotspot, and the UI says
+so with an `open` badge.
+
+## Layout
+
+Three views in the sidebar, plus one settings modal — the everyday surface is
+deliberately small, and everything rare or dangerous is one level down.
+
+| View | What it is for |
 |---|---|
-| **Dashboard** | Current note, velocity, frequency, audio state and level, valve state, MIDI connections, faults. Nothing else. |
-| **Play** | Two-octave keyboard with octave shift, velocity, pitch bend, modulation, breath, expression and volume. Live valve display. |
-| **MIDI** | Which interfaces are on, the routing matrix, live per-port counters, and the MIDI monitor. |
-| **Instrument** | Transposition, note priority, legato / retrigger / portamento, range, and the editable fingering table. |
-| **Audio** | Generator, envelope, vibrato, and the DAC → amplifier → speaker → coupling chain. |
-| **Pistons** | Valve count, mode, and per-valve actuator configuration. Live state, manual control, test pulses. |
-| **Hardware** | Detected board, one-click presets, the output chain, and the validation report. |
-| **Calibration** | Servo angles that move as you drag, audio tones and sweep, EQ and high pass, hardware tests. |
-| **Diagnostics** | Firmware, memory, audio, MIDI, network, valves, faults. Refreshes every 4 s. |
-| **Advanced** | Pin assignments, I²C addresses, UART, sample rate, bit depth, block size, DMA, limiter internals, servo and solenoid timing, network, per-route MIDI filters, import/export, factory reset. |
-| **Firmware** | Version, OTA upload with progress, reboot. |
+| **Play** | STOP / Re-arm, valve mode, the live trumpet with the pistons following the fingering, the ≥2-octave keyboard, the controller strip (velocity, bend, CC1, CC2, CC11, volume), and the Now playing / Audio / MIDI connections cards. |
+| **Configure** | Board, one-click presets, instrument (transposition, priority, legato, portamento, range), calibration, the validation report, and the wizard launcher. |
+| **Wiring** | The harness drawn from the current configuration, downloadable as SVG; the electrical declarations; and the power / bulk-capacitor table. |
+
+| Settings tab | What it is for |
+|---|---|
+| **Device** | Instrument name, Wi-Fi state, network picker with a live scan, fallback hotspot, captive portal, mDNS. |
+| **MIDI** | Which interfaces are on, the routing matrix, the per-route filters (channel, transpose, velocity curve, note range), pitch bend range, loop suppression. |
+| **Audio** | Backend → amplifier → speaker → coupling, sample rate, bit depth, limiter, generator, envelope and vibrato, and — folded away — the I²S / I²C pins, DMA and limiter internals. |
+| **Pistons** | Valve count, mode, per-valve actuator, driver, GPIO or PCA9685 channel, angles, speed, solenoid timing, plus test pulse and go-released / go-pressed. |
+| **Diagnostics** | Firmware, memory, audio, MIDI and valve state, and the MIDI monitor with pause, clear and per-source / per-type filters. |
+| **Firmware** | Version, OTA upload with progress, reboot, factory reset. |
+
+### The MIDI monitor
+
+The ring buffer lives in the firmware (`MidiMonitor`, 128 entries), so a stuck
+sequencer can never exhaust the heap and the browser never has to hold a
+backlog. Pause, clear and the capture filters are the firmware's own — the
+buttons in the UI call `POST /api/midi/monitor` and
+`POST /api/midi/monitor/clear`, and the panel reports how many older messages
+were dropped.
+
+### The wiring view
+
+The harness is generated from the configuration that is loaded, so the picture
+cannot drift from the instrument: the real backend, the real amplifier and
+speaker, the real GPIO, and one row per valve showing whether it is a servo or
+a solenoid — with the MOSFET drawn in for a solenoid, because it is not
+optional.
+
+Underneath it, the electrical dossier **asks rather than assumes**. The
+firmware cannot see a flyback diode, a fuse, a logic-level MOSFET or a separate
+actuator supply; it can only ask you to declare them. Anything not declared
+stays `unverified` and is reported as such, and anything you declare missing is
+reported as an ERROR or a WARNING. Declarations that do not apply to your build
+(no solenoid → no flyback question) are not asked.
 
 ### Setup wizard
 
@@ -67,6 +106,61 @@ one goes through the device so the numbers come from a single source of truth
 (the C++ preset table) rather than being duplicated in JavaScript.
 
 The wizard opens automatically on a board that has never been configured.
+
+## Screenshots
+
+All of these come from the real interface. `data/js/api.js` falls back to an
+in-page mock backend when no device answers, so opening `data/index.html` from
+`file://` gives a complete, deterministic demo instrument — an ESP32-S3 on the
+STANDARD preset with two servos and one solenoid — and the documentation images
+are generated from it. Regenerate them with:
+
+```bash
+npm i playwright && npx playwright install chromium
+node tools/screenshots.js
+```
+
+The `DEMO / MOCK DATA` badge in the top bar is how you tell a demo apart from a
+device; against real hardware it reads `DEVICE`.
+
+### Play
+
+![Play](../img/screenshots/play.png)
+
+The pistons follow the fingering of the note actually sounding (concert E4 →
+written F♯4 → valve 2 on a B♭ trumpet), and the keyboard highlights the note
+coming from outside in its own colour.
+
+### Configure and the wiring view
+
+| | |
+|---|---|
+| ![Configure](../img/screenshots/configure.png) | ![Wiring](../img/screenshots/wiring.png) |
+
+![Electrical declarations](../img/screenshots/wiring-electrical.png)
+
+The fingering chart is editable from Configure, and can be saved, reset,
+exported and imported:
+
+![Fingering table](../img/screenshots/configure-fingering.png)
+
+### Settings
+
+| | |
+|---|---|
+| ![Device](../img/screenshots/settings-device.png) | ![Network picker](../img/screenshots/settings-network.png) |
+| ![MIDI](../img/screenshots/settings-midi.png) | ![Routing matrix](../img/screenshots/settings-routing.png) |
+| ![Audio](../img/screenshots/settings-audio.png) | ![Pins and DMA](../img/screenshots/settings-pins.png) |
+| ![Pistons](../img/screenshots/settings-pistons.png) | ![Diagnostics](../img/screenshots/settings-diagnostics.png) |
+| ![MIDI monitor](../img/screenshots/settings-midi-monitor.png) | ![Firmware](../img/screenshots/settings-firmware.png) |
+
+### Wizard, and on a phone
+
+| | | |
+|---|---|---|
+| ![Wizard board](../img/screenshots/wizard-board.png) | ![Wizard valves](../img/screenshots/wizard-valves.png) | ![Wizard validation](../img/screenshots/wizard-validation.png) |
+
+![Mobile](../img/screenshots/mobile-play.png)
 
 ## Visual language
 
@@ -124,8 +218,13 @@ All responses are JSON and carry `"ok"`.
 | `POST` | `/api/valve/mode` | `{"mode":"AUTO"}` |
 | `POST` | `/api/valve/manual` | `{"valve":0,"pressed":true}` |
 | `POST` | `/api/valve/calibrate` | `{"valve":0,"angle":88}` — moves immediately |
+| `GET` | `/api/wifi/scan` | Networks in range; `?refresh=1` starts a new scan |
+| `POST` | `/api/wifi/hotspot` | Bring the hotspot up now and stop retrying the station |
+| `POST` | `/api/wifi/credentials` | `{"ssid":…,"password":…,"apPassword":…,"mode":"AP_STA"}` |
 | `GET` | `/api/midi/status` | Ports, routes, counters |
-| `GET` | `/api/midi/monitor` | The monitor buffer |
+| `GET` | `/api/midi/monitor` | The monitor buffer, plus the filter in force |
+| `POST` | `/api/midi/monitor` | `{"paused":true}` / `{"sources":["USB","DIN"]}` / `{"notes":false}` |
+| `POST` | `/api/midi/monitor/clear` | Empty the buffer |
 | `GET` `PUT` | `/api/fingering` | Read / write the table |
 | `POST` | `/api/fingering/reset` | Back to the standard chart |
 | `POST` | `/api/system/reboot` | Park, then restart |

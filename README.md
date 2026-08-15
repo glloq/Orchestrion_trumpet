@@ -197,15 +197,33 @@ Once it has joined your own Wi-Fi it is also reachable as
 
 ## Web configuration
 
-`Dashboard · Play · MIDI · Instrument · Audio · Pistons · Hardware ·
-Calibration · Diagnostics · Advanced · Firmware`
+`Play · Configure · Wiring`, plus one settings modal
+(`Device · MIDI · Audio · Pistons · Diagnostics · Firmware`).
 
-The everyday pages never mention a GPIO or an I²S clock. Everything rare or
+![Play](img/screenshots/play.png)
+
+The everyday views never mention a GPIO or an I²S clock. Everything rare or
 dangerous — pin assignments, DMA, bit depth, limiter internals, servo timing,
-solenoid PWM — lives on **Advanced**. Before any save the configuration is
-checked for duplicated pins, flash and strapping pins, board capabilities and
-speaker/amplifier compatibility, and the result is shown as `ERROR`,
-`WARNING` or `INFO`. See [docs/WEB_UI.md](docs/WEB_UI.md).
+solenoid PWM — is folded away behind a disclosure in Settings. Before any save
+the configuration is checked for duplicated pins, flash and strapping pins,
+board capabilities and speaker/amplifier compatibility, and the result is shown
+as `ERROR`, `WARNING` or `INFO`.
+
+The **Wiring** view draws the harness from the configuration that is actually
+loaded — the real backend, the real GPIO, one row per valve — and offers it as
+a downloadable SVG to take to the bench. Underneath it, the electrical dossier
+asks you to declare the protections the firmware cannot see (flyback diodes,
+logic-level MOSFETs, fuse, separate actuator supply, hardware emergency stop).
+Nothing is assumed: what you have not declared stays `unverified`.
+
+![Wiring](img/screenshots/wiring.png)
+
+Locked out of the network? Hold the board's **BOOT button for two seconds** and
+the hotspot comes back up. Wi-Fi passwords live on the device and are never
+written into an exported configuration.
+
+More screenshots, the REST API and the WebSocket protocol:
+[docs/WEB_UI.md](docs/WEB_UI.md).
 
 ## Wiring
 
@@ -274,7 +292,7 @@ Read this before wiring anything that moves.
 | [docs/MIDI.md](docs/MIDI.md) | Transports, router, supported messages, monophonic behaviour |
 | [docs/AUDIO.md](docs/AUDIO.md) | Synthesis, backends, speaker protection, acoustic coupling |
 | [docs/VALVES.md](docs/VALVES.md) | Fingering, servos, solenoids, safety, calibration |
-| [docs/WEB_UI.md](docs/WEB_UI.md) | Pages, REST API, WebSocket protocol |
+| [docs/WEB_UI.md](docs/WEB_UI.md) | Views, screenshots, REST API, WebSocket protocol |
 | [docs/BOM.md](docs/BOM.md) | Bill of materials per configuration |
 
 ## Status

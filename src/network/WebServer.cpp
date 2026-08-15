@@ -154,6 +154,8 @@ void HttpServerModule::registerRoutes() {
     bind("/api/wifi/credentials", HTTP_POST, &HttpServerModule::handleWifiCredentials);
     bind("/api/midi/status", HTTP_GET, &HttpServerModule::handleMidiStatus);
     bind("/api/midi/monitor", HTTP_GET, &HttpServerModule::handleMidiMonitor);
+    bind("/api/midi/monitor", HTTP_POST, &HttpServerModule::handleMidiMonitorControl);
+    bind("/api/midi/monitor/clear", HTTP_POST, &HttpServerModule::handleMidiMonitorClear);
     bind("/api/fingering", HTTP_GET, &HttpServerModule::handleGetFingering);
     bind("/api/fingering", HTTP_PUT, &HttpServerModule::handlePutFingering);
     bind("/api/fingering/reset", HTTP_POST, &HttpServerModule::handleResetFingering);
@@ -827,6 +829,19 @@ void HttpServerModule::handleMidiMonitor() {
     doc["paused"] = monitor.paused();
     doc["overflow"] = monitor.overflowCount();
     doc["perSecond"] = monitor.messagesPerSecond();
+    JsonObject filter = doc["filter"].to<JsonObject>();
+    // Reported as names, and accepted as names, so the browser never has to
+    // know the bit layout of the mask.
+    JsonArray sources = filter["sources"].to<JsonArray>();
+    for (uint8_t i = static_cast<uint8_t>(MidiPort::USB);
+         i <= static_cast<uint8_t>(MidiPort::WEB); ++i) {
+        if (monitor.sourceFilter() & static_cast<uint16_t>(1u << i)) {
+            sources.add(toString(static_cast<MidiPort>(i)));
+        }
+    }
+    filter["notes"] = monitor.showsNotes();
+    filter["controllers"] = monitor.showsControllers();
+    filter["other"] = monitor.showsOther();
     JsonArray items = doc["items"].to<JsonArray>();
     // The buffer is capped at kMonitorCapacity, so the response size is bounded
     // whatever happens on the wire.
@@ -842,6 +857,48 @@ void HttpServerModule::handleMidiMonitor() {
     }
     const size_t n = serializeJson(doc, g_buffer, sizeof(g_buffer));
     sendJson(200, g_buffer, n);
+}
+
+// Pause / resume and the capture filters.  The monitor already implements
+// them; this only exposes what the firmware can do, nothing more.  Every field
+// is optional so the UI can send one control at a time.
+void HttpServerModule::handleMidiMonitorControl() {
+    JsonDocument doc;
+    if (deserializeJson(doc, g_http->arg("plain")) != DeserializationError::Ok) {
+        sendError(400, "invalid JSON body");
+        return;
+    }
+    MidiMonitor& monitor = app_->monitor();
+
+    if (!doc["paused"].isNull()) monitor.setPaused(doc["paused"].as<bool>());
+
+    if (doc["sources"].is<JsonArray>()) {
+        // A list of port names, so the caller never has to know the bit layout.
+        uint16_t mask = 0;
+        for (JsonVariant v : doc["sources"].as<JsonArray>()) {
+            MidiPort port;
+            if (!parseEnum(v.as<const char*>(), port)) {
+                sendError(400, "unknown MIDI source in the filter");
+                return;
+            }
+            mask |= static_cast<uint16_t>(1u << static_cast<uint8_t>(port));
+        }
+        monitor.setSourceFilter(mask);
+    } else if (!doc["sources"].isNull()) {
+        monitor.setSourceFilter(doc["sources"].as<uint16_t>());
+    }
+
+    if (!doc["notes"].isNull() || !doc["controllers"].isNull() || !doc["other"].isNull()) {
+        monitor.setTypeFilter(doc["notes"] | monitor.showsNotes(),
+                              doc["controllers"] | monitor.showsControllers(),
+                              doc["other"] | monitor.showsOther());
+    }
+    sendOk();
+}
+
+void HttpServerModule::handleMidiMonitorClear() {
+    app_->monitor().clear();
+    sendOk();
 }
 
 // ---------------------------------------------------------------------------

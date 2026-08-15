@@ -221,3 +221,10 @@ bytes, with pause, clear and per-source/per-type filters. Bounded on purpose:
 a stuck sequencer can send thousands of messages per second and the monitor
 must never be able to exhaust the heap. Overflowed entries are counted and
 reported rather than hidden.
+
+Pause, clear and the filters are the device's, not the browser's — the buttons
+call `POST /api/midi/monitor` (`paused`, `sources`, `notes`, `controllers`,
+`other`) and `POST /api/midi/monitor/clear`, and `GET /api/midi/monitor`
+reports the filter in force so two open browsers agree.
+
+![MIDI monitor](../img/screenshots/settings-midi-monitor.png)

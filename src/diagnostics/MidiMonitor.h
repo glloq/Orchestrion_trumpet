@@ -34,6 +34,13 @@ public:
     void setSourceFilter(uint16_t portMask) { sourceMask_ = portMask; }
     void setTypeFilter(bool notes, bool controllers, bool other);
 
+    // Read back so the web UI can show the filter that is really in force
+    // rather than a copy it keeps on its own side.
+    uint16_t sourceFilter() const { return sourceMask_; }
+    bool showsNotes() const { return showNotes_; }
+    bool showsControllers() const { return showControllers_; }
+    bool showsOther() const { return showOther_; }
+
     uint16_t count() const { return count_; }
     // 0 = oldest kept entry.
     const MonitorEntry& entry(uint16_t index) const;

@@ -44,6 +44,8 @@ private:
     void handleWifiCredentials();
     void handleMidiStatus();
     void handleMidiMonitor();
+    void handleMidiMonitorControl();
+    void handleMidiMonitorClear();
     void handleExport();
     void handleImport();
     void handlePreset();
