@@ -254,9 +254,11 @@ struct ValvesConfig {
 
     ValvesConfig() {
         // Sensible starting point: three servos on the ESP32 PWM peripheral.
+        // These must not collide with the default DIN MIDI pins (17/18);
+        // ConfigManager::makeDefaults() refines them per board anyway.
         items[0].gpio = 15;
         items[1].gpio = 16;
-        items[2].gpio = 17;
+        items[2].gpio = 4;
         items[3].type = ValveActuatorType::OFF;
         items[0].ccNumber = 20;
         items[1].ccNumber = 21;

@@ -224,8 +224,22 @@ const Pages = (() => {
     Keyboard.build(kbd, { baseNote: 60, octaves: 2, range });
     octaveLabel.textContent = UI.noteName(Keyboard.baseNote());
 
-    host.updateLive = (t) => { if (t) renderValves(valveHost, t.valves, false); };
-    host.onLeave = () => Keyboard.releaseAll();
+    // A note arriving from USB, BLE, DIN or RTP lights up on the keyboard too,
+    // so the Play page shows what the instrument is really doing.
+    let externalNote = 0;
+    host.updateLive = (t) => {
+      if (!t) return;
+      renderValves(valveHost, t.valves, false);
+      const note = t.audio && t.audio.note ? t.audio.note : 0;
+      if (note === externalNote) return;
+      if (externalNote) Keyboard.highlightExternal(externalNote, false);
+      if (note) Keyboard.highlightExternal(note, true);
+      externalNote = note;
+    };
+    host.onLeave = () => {
+      Keyboard.releaseAll();
+      if (externalNote) Keyboard.highlightExternal(externalNote, false);
+    };
   }
 
   // =========================================================================

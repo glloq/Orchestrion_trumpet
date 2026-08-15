@@ -440,17 +440,4 @@ bool AppController::factoryReset() {
     return ok;
 }
 
-bool AppController::reconfigure() {
-    const InstrumentConfiguration& cfg = config_.config();
-
-    // These can be applied live, with no interruption of the audio task.
-    audioEngine_.configure(cfg.audio, cfg.speaker, cfg.amplifier, cfg.acoustic, cfg.instrument);
-    router_.configure(cfg.midi);
-    monitor_.setSourceFilter(0xFFFF);
-
-    // Anything that owns a peripheral (I2S pins, valve drivers, transports)
-    // needs a clean restart: say so instead of pretending it worked.
-    return false;
-}
-
 }  // namespace ot

@@ -83,6 +83,20 @@ void ValveController::setMode(ValveMode mode) {
     }
 }
 
+uint8_t ValveController::desiredMask() const {
+    switch (cfg_.mode) {
+        case ValveMode::AUTO:
+            return notes_.hasNote() ? maskForNote(notes_.activeNote()) : 0;
+        case ValveMode::MANUAL:
+            return manualMask_;
+        case ValveMode::MIDI_CC:
+            return ccMask_;
+        case ValveMode::OFF:
+        default:
+            return 0;
+    }
+}
+
 uint8_t ValveController::maskForNote(uint8_t midiNote) const {
     const uint8_t mask = fingering_.fingeringForMidiNote(midiNote);
     if (mask == kNoFingering) return 0;
@@ -166,10 +180,12 @@ void ValveController::update() {
             if (((pulseMask_ >> i) & 1u) == 0) continue;
             if (static_cast<int32_t>(now - pulseUntilMs_[i]) < 0) continue;
             pulseMask_ &= static_cast<uint8_t>(~(1u << i));
+
+            // A test pulse must leave the valve exactly where the current mode
+            // wants it, not simply released: pulsing a valve while a note is
+            // held would otherwise silently lift it for the rest of the note.
+            const bool stillWanted = ((desiredMask() >> i) & 1u) != 0;
             IValveActuator* d = driverFor(i);
-            const bool stillWanted = (cfg_.mode == ValveMode::MANUAL)
-                                         ? ((manualMask_ >> i) & 1u)
-                                         : false;
             if (d && !stillWanted) {
                 d->setValve(i, false);
                 currentMask_ &= static_cast<uint8_t>(~(1u << i));

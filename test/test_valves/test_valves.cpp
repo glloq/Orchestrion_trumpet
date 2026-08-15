@@ -427,6 +427,33 @@ void test_controller_modes(void) {
     TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
 }
 
+void test_test_pulse_restores_the_played_state(void) {
+    ValveController controller;
+    controller.begin(mixedConfig(), writtenPitch());
+
+    // Written E4 is 1-2: valve 1 down, valve 3 up.
+    controller.onMidi(MidiMessage::noteOn(1, 64, 100));
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+
+    // Pulsing valve 3 while the note is held must not disturb valves 1 and 2,
+    // and valve 3 must go back up when the pulse ends.
+    hostSetMillis(1000);
+    TEST_ASSERT_TRUE(controller.testPulse(2, 200));
+    TEST_ASSERT_TRUE(controller.status(2).pressed);
+    hostSetMillis(1300);
+    controller.update();
+    TEST_ASSERT_FALSE(controller.status(2).pressed);
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+
+    // Pulsing a valve the note actually needs must leave it down afterwards.
+    hostSetMillis(2000);
+    controller.testPulse(0, 200);
+    hostSetMillis(2300);
+    controller.update();
+    TEST_ASSERT_TRUE(controller.status(0).pressed);
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+}
+
 void test_controller_ignores_valves_it_does_not_have(void) {
     ValveController controller;
     ValvesConfig cfg = mixedConfig();
@@ -478,6 +505,7 @@ int main(int, char**) {
     RUN_TEST(test_controller_all_notes_off_releases_every_valve);
     RUN_TEST(test_controller_panic_parks_everything);
     RUN_TEST(test_controller_modes);
+    RUN_TEST(test_test_pulse_restores_the_played_state);
     RUN_TEST(test_controller_ignores_valves_it_does_not_have);
     RUN_TEST(test_mock_actuator_contract);
     return UNITY_END();

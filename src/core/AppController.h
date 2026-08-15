@@ -51,9 +51,6 @@ public:
     void reboot(uint32_t delayMs);
     bool applyConfiguration(const InstrumentConfiguration& candidate, ValidationReport& report);
     bool factoryReset();
-    // Re-applies the audio/valve/MIDI configuration without rebooting when
-    // that is possible; returns false when a reboot is required.
-    bool reconfigure();
 
     // ---- accessors used by the web layer --------------------------------
     ConfigManager& configManager() { return config_; }

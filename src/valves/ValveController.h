@@ -64,6 +64,8 @@ public:
 
     // Exposed so the diagnostics page can show what the note maps to.
     uint8_t maskForNote(uint8_t midiNote) const;
+    // What the current mode wants the valves to be, ignoring any test pulse.
+    uint8_t desiredMask() const;
 
 private:
     void applyMask(uint8_t mask);
