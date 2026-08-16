@@ -398,6 +398,18 @@ struct ValvesConfig {
     }
 };
 
+// A note the user fingers differently from the standard chart. Only the
+// differences are stored: the chart itself is code, and a file that repeated
+// all 128 notes would fossilise a typo in the defaults for ever.
+static constexpr uint8_t kNoFingeringMask = 0xFF;   // "this note has none"
+static constexpr uint8_t kMaxFingeringOverrides = 48;
+
+struct FingeringOverride {
+    uint8_t written = 0;
+    uint8_t primary = kNoFingeringMask;
+    uint8_t alternate = kNoFingeringMask;
+};
+
 struct InstrumentConfig {
     InstrumentType type = InstrumentType::BB_TRUMPET;
     PitchInterpretation pitchMode = PitchInterpretation::CONCERT;
@@ -408,6 +420,9 @@ struct InstrumentConfig {
     float portamentoMs = 0.0f;
     uint8_t noteMin = 52;   // E3 concert - realistic trumpet range
     uint8_t noteMax = 86;   // D6
+
+    uint8_t fingeringOverrideCount = 0;
+    FingeringOverride fingeringOverrides[kMaxFingeringOverrides];
 };
 
 struct MidiRoute {

@@ -80,7 +80,39 @@ uint8_t FingeringEngine::defaultAlternate(int writtenNote) {
 
 void FingeringEngine::configure(const InstrumentConfig& cfg) {
     cfg_ = cfg;
-    if (!initialised_) resetToDefault();
+    // The stored edits are part of the configuration, so applying a
+    // configuration applies them — including at boot, which is the whole point
+    // of storing them.
+    applyOverrides(cfg.fingeringOverrides, cfg.fingeringOverrideCount);
+}
+
+void FingeringEngine::applyOverrides(const FingeringOverride* items, uint8_t count) {
+    resetToDefault();
+    if (!items) return;
+    for (uint8_t i = 0; i < count && i < kMaxFingeringOverrides; ++i) {
+        setFingering(items[i].written, items[i].primary, items[i].alternate);
+    }
+}
+
+uint8_t FingeringEngine::collectOverrides(FingeringOverride* out, uint8_t max,
+                                          bool* overflowed) const {
+    if (overflowed) *overflowed = false;
+    if (!out || max == 0) return 0;
+    uint8_t count = 0;
+    for (int n = 0; n < 128; ++n) {
+        const uint8_t p = initialised_ ? primary_[n] : defaultPrimary(n);
+        const uint8_t a = initialised_ ? alternate_[n] : defaultAlternate(n);
+        if (p == defaultPrimary(n) && a == defaultAlternate(n)) continue;
+        if (count >= max) {
+            if (overflowed) *overflowed = true;
+            break;
+        }
+        out[count].written = static_cast<uint8_t>(n);
+        out[count].primary = p;
+        out[count].alternate = a;
+        ++count;
+    }
+    return count;
 }
 
 void FingeringEngine::resetToDefault() {

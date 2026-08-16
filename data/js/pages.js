@@ -309,7 +309,16 @@ const Pages = (() => {
       try {
         const result = await API.putFingering(data.notes.map((r) => ({
           written: r.written, primary: r.primary, alternate: r.alternate })));
-        UI.toast('Fingering applied (' + result.applied + ' notes)', 'ok');
+        if (result.truncated) {
+          UI.toast('Applied, but only ' + result.stored + ' edits fit in the configuration: '
+                 + 'the rest will be lost at the next boot', 'bad');
+        } else if (result.persisted === false) {
+          UI.toast('Applied to ' + result.applied + ' notes, but the configuration could not '
+                 + 'be written', 'bad');
+        } else {
+          UI.toast('Fingering applied and saved (' + result.applied + ' notes, '
+                 + (result.stored || 0) + ' stored)', 'ok');
+        }
       } catch (err) { UI.toast(err.message, 'bad'); }
     }
 
@@ -340,8 +349,9 @@ const Pages = (() => {
     fileInput.addEventListener('change', importTable);
 
     wrap.appendChild(UI.el('p', { class: 'help', style: 'margin-top:0',
-      text: 'Written pitch to valve combination. Click a circle to change it. The table lives '
-          + 'in RAM and is rebuilt at every boot — persisting it is planned for schema v3.' }));
+      text: 'Written pitch to valve combination. Click a circle to change it, then save: the '
+          + 'notes that differ from the standard chart are stored in the configuration and '
+          + 'reapplied at every boot.' }));
     wrap.appendChild(UI.el('div', { class: 'btn-row', style: 'margin-bottom:10px' }, [
       UI.el('button', { class: 'btn small primary', text: 'Save to the instrument',
                         onclick: saveTable }),

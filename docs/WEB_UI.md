@@ -183,7 +183,8 @@ coming from outside in its own colour.
 ![Electrical declarations](../img/screenshots/wiring-electrical.png)
 
 The fingering chart is editable from Configure, and can be saved, reset,
-exported and imported:
+exported and imported. Saving stores the notes that differ from the standard
+chart in the configuration, so an edited chart survives a reboot:
 
 ![Fingering table](../img/screenshots/configure-fingering.png)
 

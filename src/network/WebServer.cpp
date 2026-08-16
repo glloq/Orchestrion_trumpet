@@ -1109,13 +1109,24 @@ void HttpServerModule::handlePutFingering() {
                                 primary < 0 ? kNoFingering : static_cast<uint8_t>(primary),
                                 alternate < 0 ? kNoFingering : static_cast<uint8_t>(alternate));
     }
+    // The chart is rebuilt at boot from the standard table plus the stored
+    // edits, so the edits have to reach the configuration file — the button
+    // says "Save to the instrument".
+    InstrumentConfiguration& cfg = app_->configManager().config();
+    bool overflowed = false;
+    cfg.instrument.fingeringOverrideCount = engine.collectOverrides(
+        cfg.instrument.fingeringOverrides, kMaxFingeringOverrides, &overflowed);
+    const bool persisted = app_->configManager().save();
+
     JsonDocument out;
     out["ok"] = true;
     out["applied"] = applied;
-    // The table lives in RAM: it is rebuilt from the defaults plus the stored
-    // overrides at every boot.  Persisting it is a schema v3 item, and the UI
-    // says so rather than pretending the change survives a reset.
-    out["persisted"] = false;
+    out["persisted"] = persisted;
+    out["stored"] = cfg.instrument.fingeringOverrideCount;
+    // A table that differs from the standard chart in more places than the file
+    // can hold is reported rather than silently truncated: the extra notes are
+    // playing now and would come back wrong after a reset.
+    if (overflowed) out["truncated"] = true;
     const size_t n = serializeJson(out, g_buffer, sizeof(g_buffer));
     sendJson(200, g_buffer, n);
 }
@@ -1123,6 +1134,9 @@ void HttpServerModule::handlePutFingering() {
 void HttpServerModule::handleResetFingering() {
     app_->valves().fingering().resetToDefault();
     app_->audio().fingering().resetToDefault();
+    InstrumentConfiguration& cfg = app_->configManager().config();
+    cfg.instrument.fingeringOverrideCount = 0;
+    app_->configManager().save();
     sendOk();
 }
 

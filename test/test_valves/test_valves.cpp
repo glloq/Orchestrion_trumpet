@@ -123,6 +123,61 @@ void test_fingering_table_can_be_edited_and_reset(void) {
     TEST_ASSERT_EQUAL_UINT8(0, engine.primary(60));
 }
 
+// An edited chart has to survive a reboot, and only the edits may be stored:
+// writing all 128 notes out would fossilise the standard chart in the file.
+void test_fingering_overrides_are_only_the_differences(void) {
+    InstrumentConfig cfg;
+    FingeringEngine engine;
+    engine.configure(cfg);
+
+    FingeringOverride items[kMaxFingeringOverrides];
+    bool overflowed = true;
+    TEST_ASSERT_EQUAL_UINT8(0, engine.collectOverrides(items, kMaxFingeringOverrides, &overflowed));
+    TEST_ASSERT_FALSE(overflowed);
+
+    engine.setFingering(60, V1 | V3, V2);
+    engine.setFingering(72, kNoFingering, kNoFingering);
+    const uint8_t n = engine.collectOverrides(items, kMaxFingeringOverrides, &overflowed);
+    TEST_ASSERT_EQUAL_UINT8(2, n);
+    TEST_ASSERT_FALSE(overflowed);
+    TEST_ASSERT_EQUAL_UINT8(60, items[0].written);
+    TEST_ASSERT_EQUAL_UINT8(V1 | V3, items[0].primary);
+    TEST_ASSERT_EQUAL_UINT8(V2, items[0].alternate);
+    TEST_ASSERT_EQUAL_UINT8(kNoFingeringMask, items[1].primary);
+
+    // Reboot: the standard chart, then the stored edits on top of it.
+    cfg.fingeringOverrideCount = n;
+    for (uint8_t i = 0; i < n; ++i) cfg.fingeringOverrides[i] = items[i];
+    FingeringEngine afterBoot;
+    afterBoot.configure(cfg);
+    TEST_ASSERT_EQUAL_UINT8(V1 | V3, afterBoot.primary(60));
+    TEST_ASSERT_EQUAL_UINT8(V2, afterBoot.alternate(60));
+    TEST_ASSERT_EQUAL_UINT8(kNoFingering, afterBoot.primary(72));
+    // Everything else is still the factory chart.
+    TEST_ASSERT_EQUAL_UINT8(FingeringEngine::defaultPrimary(64), afterBoot.primary(64));
+}
+
+void test_fingering_overrides_report_an_overflow(void) {
+    InstrumentConfig cfg;
+    FingeringEngine engine;
+    engine.configure(cfg);
+
+    // More edited notes than the configuration can carry.
+    uint8_t edited = 0;
+    for (int n = 40; n <= 96 && edited < kMaxFingeringOverrides + 3; ++n) {
+        const uint8_t want = static_cast<uint8_t>(FingeringEngine::defaultPrimary(n) ^ V3);
+        if (want & 0xF0) continue;
+        engine.setFingering(static_cast<uint8_t>(n), want, kNoFingering);
+        ++edited;
+    }
+
+    FingeringOverride items[kMaxFingeringOverrides];
+    bool overflowed = false;
+    const uint8_t n = engine.collectOverrides(items, kMaxFingeringOverrides, &overflowed);
+    TEST_ASSERT_EQUAL_UINT8(kMaxFingeringOverrides, n);
+    TEST_ASSERT_TRUE(overflowed);
+}
+
 // ---------------------------------------------------------------------------
 // Servo motion
 // ---------------------------------------------------------------------------
@@ -782,6 +837,8 @@ int main(int, char**) {
     RUN_TEST(test_fingering_bb_transposition_written);
     RUN_TEST(test_fingering_other_instruments);
     RUN_TEST(test_fingering_table_can_be_edited_and_reset);
+    RUN_TEST(test_fingering_overrides_are_only_the_differences);
+    RUN_TEST(test_fingering_overrides_report_an_overflow);
     RUN_TEST(test_servo_reaches_the_target_and_never_overshoots);
     RUN_TEST(test_servo_speed_is_limited);
     RUN_TEST(test_servo_detaches_after_the_movement);

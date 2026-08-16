@@ -220,8 +220,7 @@ as working:
 |---|---|
 | `SAMPLE` sound generator | Not implemented. The enumeration does not contain it and the UI does not offer it, because the storage backend (Flash / LittleFS / SD / PSRAM) is not written. The generator interface is ready for it. |
 | Microphone acoustic calibration | The ES8388 and WM8960 backends initialise their ADC and the I²S capture channel is opened, so the signal path exists. The sweep, the measurement and the EQ correction are **not** implemented. The Calibration page says so. |
-| Program Change, SysEx, MPE | The parser decodes them and the router forwards them; the sound engine ignores them. The architecture is extensible, the behaviour is not invented. |
-| Fingering table persistence | The table can be edited, exported and imported, and applies immediately, but it lives in RAM and is rebuilt from the defaults at each boot. The API response carries `"persisted": false` and the UI repeats it. Persisting it is a schema v3 item. |
+| MPE, SysEx | Program Change selects a saved voicing when the user turns the option on. SysEx is reassembled and routed; the sound engine ignores it. MPE is not implemented — per-note pitch needs a polyphonic voice allocator. |
 | ES8388 / WM8960 / TAS5760M | Written from the datasheets and compiled for both targets, not validated on silicon by the project. Reported as `EXPERIMENTAL` in the UI and the diagnostics. |
 | OTA on a 4 MB ESP32 | Not possible — the firmware does not leave room for two OTA slots. Detected at runtime and reported, not hidden. |
 

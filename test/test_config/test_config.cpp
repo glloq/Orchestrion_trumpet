@@ -102,6 +102,32 @@ void test_round_trip_preserves_values(void) {
     TEST_ASSERT_EQUAL_UINT8(original.midi.routeCount, restored.midi.routeCount);
 }
 
+void test_fingering_edits_survive_the_round_trip(void) {
+    InstrumentConfiguration original;
+    ConfigManager::makeDefaults(original);
+    original.instrument.fingeringOverrideCount = 2;
+    original.instrument.fingeringOverrides[0] = {60, 0x05, 0x02};
+    original.instrument.fingeringOverrides[1] = {72, kNoFingeringMask, kNoFingeringMask};
+
+    static char buffer[8192];
+    const size_t length = serializeConfig(original, buffer, sizeof(buffer));
+    InstrumentConfiguration restored;
+    TEST_ASSERT_TRUE(deserializeConfig(buffer, length, restored));
+
+    TEST_ASSERT_EQUAL_UINT8(2, restored.instrument.fingeringOverrideCount);
+    TEST_ASSERT_EQUAL_UINT8(60, restored.instrument.fingeringOverrides[0].written);
+    TEST_ASSERT_EQUAL_UINT8(0x05, restored.instrument.fingeringOverrides[0].primary);
+    TEST_ASSERT_EQUAL_UINT8(0x02, restored.instrument.fingeringOverrides[0].alternate);
+    // "no fingering" is not the open position and must not become one.
+    TEST_ASSERT_EQUAL_UINT8(kNoFingeringMask, restored.instrument.fingeringOverrides[1].primary);
+
+    // A file with no edits carries no chart at all.
+    ConfigManager::makeDefaults(original);
+    const size_t plain = serializeConfig(original, buffer, sizeof(buffer));
+    TEST_ASSERT_GREATER_THAN(200u, plain);
+    TEST_ASSERT_NULL(strstr(buffer, "\"fingering\""));
+}
+
 void test_missing_fields_keep_their_default(void) {
     // A minimal document from an older or hand-written file.
     const char* json = "{\"schemaVersion\":2,\"audio\":{\"sampleRate\":32000}}";
@@ -634,6 +660,7 @@ int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_defaults_are_valid);
     RUN_TEST(test_round_trip_preserves_values);
+    RUN_TEST(test_fingering_edits_survive_the_round_trip);
     RUN_TEST(test_missing_fields_keep_their_default);
     RUN_TEST(test_unknown_fields_are_ignored);
     RUN_TEST(test_garbage_is_rejected);

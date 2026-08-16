@@ -83,9 +83,13 @@ and **Reset to default** restores the chart above.
 
 ![Fingering table](../img/screenshots/configure-fingering.png)
 
-> The table lives in RAM and is rebuilt from the defaults at every boot. The
-> API response carries `"persisted": false` and the UI repeats it; persisting
-> user edits is a schema v3 item.
+Saving writes the edits into the configuration file and the chart is rebuilt
+from the standard table plus those edits at every boot. Only the notes that
+*differ* are stored — a file repeating all 128 notes would fossilise the
+standard chart, typos included — and there is room for
+`kMaxFingeringOverrides` (48) of them. The response says how many were stored
+and whether any had to be dropped; the UI shows that rather than claiming a
+save that did not fit.
 
 ### Transposition
 
