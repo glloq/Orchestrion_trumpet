@@ -138,7 +138,7 @@ Documented bundles, selectable in one click:
 
 | Preset | Chain | Relative quality |
 |---|---|---|
-| `LOW_COST` | ESP32 → MAX98357A → Dayton CE70P-4 | ★★★ |
+| `LOW_COST` | ESP32 → MAX98357A → Dayton CE70PR-4 | ★★★ |
 | `COMPACT` | ESP32 → MAX98357A → Visaton FRS 5 XTS | ★★★ |
 | **`STANDARD`** | ESP32 → PCM5102A → TPA3118D2 → Visaton FRS 8 M → sealed chamber → trumpet | ★★★★½ |
 | `QUALITY` | ESP32 → PCM5102A → TPA3118D2 → Monacor SPX-30M | ★★★★★ |
@@ -303,6 +303,25 @@ In short: everything in this README is implemented and compiles for both
 targets; the parts that are *prepared but not finished* — sample playback,
 microphone-based acoustic calibration, MPE — are named as such here, in the
 documentation and in the web UI, and are never presented as working.
+
+**The software is well ahead of the hardware.** The host suite covers the
+configuration, the router, the DSP, the fingering chart, the solenoid guard,
+the acoustic model and the attack timing; compiling for the ESP32 proves the
+code builds, not that a DAW enumerates the USB device or that the FRS 8 M
+survives an hour of sustained tone. The remaining work is not more
+architecture, it is the bench:
+
+```
+1  ESP32-S3 + PCM5102A + TPA3118 + FRS 8 M, and measure:
+   frequency response, SPL, distortion, current, voice-coil
+   temperature, underruns, MIDI -> audio latency
+2  the three actuation paths: servo on ESP32 PWM, servo on PCA9685, solenoid
+3  every MIDI transport, on Windows / macOS / Linux / Raspberry Pi
+4  only then: ES8388, WM8960 and TAS5760M from EXPERIMENTAL to STABLE
+```
+
+Nothing in the acoustic model is a measurement, and the UI says so next to
+every number it derives.
 
 ## License
 

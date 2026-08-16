@@ -71,6 +71,8 @@ bool MidiUsbTransport::begin() {
 }
 
 void MidiUsbTransport::end() {
+    // An unplug in the middle of a SysEx must not leave half a message behind.
+    sysexParser_.reset();
 #if defined(OT_HAS_USB_MIDI)
     if (started_) g_usbMidi.end();
 #endif
@@ -91,6 +93,34 @@ void MidiUsbTransport::poll() {
     midiEventPacket_t packet;
     uint8_t budget = 32;   // bounded: never let USB starve the MIDI task
     while (budget-- && g_usbMidi.readPacket(&packet)) {
+        // The code index number says how to read the three payload bytes; the
+        // status byte alone is not enough, because in a SysEx packet byte1 is
+        // ordinary data.
+        const uint8_t cin = static_cast<uint8_t>(packet.header & 0x0F);
+        const uint8_t payload[3] = {packet.byte1, packet.byte2, packet.byte3};
+
+        // 0x4 SysEx start/continue, 0x5..0x7 SysEx end with 1..3 bytes.
+        // 0x5 doubles as "single byte", which is how a bare real-time byte
+        // arrives, and the parser handles both cases identically.
+        uint8_t sysexBytes = 0;
+        switch (cin) {
+            case 0x4: sysexBytes = 3; break;
+            case 0x5: sysexBytes = 1; break;
+            case 0x6: sysexBytes = 2; break;
+            case 0x7: sysexBytes = 3; break;
+            default: break;
+        }
+        if (sysexBytes) {
+            MidiMessage msg;
+            for (uint8_t i = 0; i < sysexBytes; ++i) {
+                if (sysexParser_.parse(payload[i], msg)) {
+                    msg.timestampMs = millis();
+                    deliver(msg);
+                }
+            }
+            continue;
+        }
+
         const uint8_t status = packet.byte1;
         if (status < 0x80) continue;
 
@@ -106,7 +136,6 @@ void MidiUsbTransport::poll() {
         }
         msg.data1 = packet.byte2 & 0x7F;
         msg.data2 = packet.byte3 & 0x7F;
-        if (msg.type == MidiType::SystemExclusive) continue;   // not forwarded yet
         deliver(msg);
     }
 #endif

@@ -14,7 +14,7 @@ namespace ot {
 
 // Current on-disk schema.  Bump it and add a step in ConfigMigration whenever
 // the meaning of an existing field changes.
-static constexpr uint16_t kConfigSchemaVersion = 2;
+static constexpr uint16_t kConfigSchemaVersion = 3;
 
 static constexpr uint8_t kMaxValves = 4;
 static constexpr uint8_t kMaxHarmonics = 16;
@@ -198,20 +198,48 @@ struct SpeakerConfig {
     SpeakerProfileId profile = SpeakerProfileId::VISATON_FRS8M;
     char name[kNameLen] = "Visaton FRS 8 M";
     float impedanceOhm = 8.0f;
-    float powerRmsW = 30.0f;
-    float minFrequencyHz = 150.0f;
+    float powerRmsW = 30.0f;        // manufacturer continuous rating
+    float powerMaxW = 50.0f;        // manufacturer short-term maximum
+    float minFrequencyHz = 100.0f;
     float maxFrequencyHz = 20000.0f;
     float recommendedHighPassHz = 160.0f;
     float gainCorrectionDb = 0.0f;
     float powerLimitW = 20.0f;      // what the protection stage enforces
+    // Thiele-Small parameters, needed to predict what a sealed rear chamber
+    // does to the driver's resonance.  Zero means "not entered": the acoustic
+    // model then says the figure is unknown instead of inventing one.
+    float fsHz = 0.0f;
+    float vasLitres = 0.0f;
 };
 
+// One cone of the two-stage compression between the driver and the leadpipe.
+struct HornStageConfig {
+    float inletDiameterMm = 60.0f;
+    float outletDiameterMm = 28.0f;
+    float lengthMm = 58.0f;
+};
+
+// The coupling geometry.  See AcousticModel.h for what is derived from it and,
+// just as importantly, for what is not.
 struct AcousticConfig {
     AcousticCouplingType coupling = AcousticCouplingType::SEALED_CHAMBER;
-    float chamberVolumeMl = 120.0f;
-    float outletDiameterMm = 11.0f;
-    float outletLengthMm = 45.0f;
-    float highPassHz = 170.0f;
+
+    // Behind the cone.
+    float rearChamberVolumeMl = 120.0f;
+    // In front of the cone, before the first compression stage.
+    float frontChamberVolumeMl = 35.0f;
+    float frontChamberDepthMm = 8.0f;
+
+    HornStageConfig stage1;                 // driver cone -> intermediate tube
+    float intermediateDiameterMm = 28.0f;
+    float intermediateLengthMm = 20.0f;
+    HornStageConfig stage2{28.0f, 12.0f, 40.0f};   // intermediate -> leadpipe
+    float leadpipeDiameterMm = 11.0f;
+
+    // Bench overrides.  Zero means "not measured, derive it from the geometry
+    // above"; a positive value always wins, because a measurement beats a
+    // model.
+    float measuredHighPassHz = 0.0f;
     float eqGainDb = 2.0f;          // gentle presence lift of the coupling
 };
 
@@ -240,6 +268,25 @@ struct ValveConfig {
     uint8_t maxDutyPercent = 60;    // long term duty cycle guard
     // --- MIDI_CC mode ---
     uint8_t ccNumber = 20;
+    // Mechanical settle time measured at the bench, in ms.  Zero means
+    // "estimate it from the travel and the speed above"; a bench figure always
+    // wins because the estimate ignores load, linkage slop and stiction.
+    uint16_t measuredSettleMs = 0;
+};
+
+// The pistons change the resonator, so a note that starts before they have
+// arrived is played through the wrong bore.  This delays the attack by the
+// time the actuators actually need.
+struct ValveSyncConfig {
+    bool enabled = true;
+    // Only wait when the fingering has to change: a repeated note on the same
+    // combination needs no delay at all.
+    bool onlyWhenFingeringChanges = true;
+    // Added to (or subtracted from) the computed settle time, so the bench can
+    // trim the result without editing every valve.
+    int16_t trimMs = 0;
+    // Nothing is ever delayed by more than this, whatever the arithmetic says.
+    uint16_t maxDelayMs = 120;
 };
 
 struct ValvesConfig {
@@ -251,6 +298,7 @@ struct ValvesConfig {
     int8_t pca9685OePin = -1;
     uint16_t servoFrequencyHz = 50;
     uint16_t solenoidPwmFrequencyHz = 20000;
+    ValveSyncConfig sync;
 
     ValvesConfig() {
         // Sensible starting point: three servos on the ESP32 PWM peripheral.

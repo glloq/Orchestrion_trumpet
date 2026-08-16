@@ -214,6 +214,52 @@ void test_migration_v1_creates_routes(void) {
     TEST_ASSERT_TRUE(dinToValves);
 }
 
+void test_migration_v2_repairs_the_speaker_rating(void) {
+    // A v2 file that stored the old, wrong Monacor figures: 30 W "RMS" and a
+    // 22 W protection limit, both above the manufacturer's 20 W continuous
+    // rating.  Migrating must repair a catalogued driver rather than keep
+    // running the coil above what it is specified for.
+    const char* json =
+        "{\"schemaVersion\":2,\"speaker\":{\"profile\":\"MONACOR_SPX30M\","
+        "\"powerRms\":30.0,\"powerLimit\":22.0,\"impedance\":8.0},"
+        "\"acoustic\":{\"coupling\":\"SEALED_CHAMBER\",\"chamberVolumeMl\":120.0,"
+        "\"outletDiameterMm\":11.0,\"outletLengthMm\":45.0,\"highPassHz\":170.0}}";
+    InstrumentConfiguration cfg;
+    TEST_ASSERT_TRUE(deserializeConfig(json, strlen(json), cfg));
+
+    TEST_ASSERT_EQUAL_UINT16(kConfigSchemaVersion, cfg.schemaVersion);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 20.0f, cfg.speaker.powerRmsW);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 40.0f, cfg.speaker.powerMaxW);
+    TEST_ASSERT_TRUE(cfg.speaker.powerLimitW <= cfg.speaker.powerRmsW);
+
+    // The old single-chamber geometry is carried over, not discarded.
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 120.0f, cfg.acoustic.rearChamberVolumeMl);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 11.0f, cfg.acoustic.leadpipeDiameterMm);
+    // A hand-entered high pass was the only figure a v2 user could give, so it
+    // becomes the measured override rather than being thrown away.
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 170.0f, cfg.acoustic.measuredHighPassHz);
+    TEST_ASSERT_TRUE(cfg.acoustic.stage1.inletDiameterMm > 0.0f);
+    TEST_ASSERT_TRUE(cfg.valves.sync.enabled);
+}
+
+void test_migration_v2_leaves_a_custom_speaker_alone(void) {
+    // A CUSTOM speaker is the builder's own measurement: migrating must not
+    // overwrite it with a catalogue row.
+    const char* json =
+        "{\"schemaVersion\":2,\"speaker\":{\"profile\":\"CUSTOM\",\"name\":\"my driver\","
+        "\"powerRms\":7.5,\"powerLimit\":5.0,\"impedance\":6.0}}";
+    InstrumentConfiguration cfg;
+    TEST_ASSERT_TRUE(deserializeConfig(json, strlen(json), cfg));
+
+    TEST_ASSERT_EQUAL_STRING("my driver", cfg.speaker.name);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 7.5f, cfg.speaker.powerRmsW);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 5.0f, cfg.speaker.powerLimitW);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 6.0f, cfg.speaker.impedanceOhm);
+    // No maximum was ever stored: fall back to the continuous rating rather
+    // than to something invented.
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 7.5f, cfg.speaker.powerMaxW);
+}
+
 void test_migration_is_idempotent(void) {
     InstrumentConfiguration cfg;
     ConfigManager::makeDefaults(cfg);
@@ -416,6 +462,8 @@ int main(int, char**) {
     RUN_TEST(test_saving_a_redacted_document_keeps_the_stored_passwords);
     RUN_TEST(test_an_explicit_password_still_wins);
     RUN_TEST(test_migration_v1_creates_routes);
+    RUN_TEST(test_migration_v2_repairs_the_speaker_rating);
+    RUN_TEST(test_migration_v2_leaves_a_custom_speaker_alone);
     RUN_TEST(test_migration_is_idempotent);
     RUN_TEST(test_migration_refuses_a_newer_schema);
     RUN_TEST(test_duplicate_gpio_is_an_error);

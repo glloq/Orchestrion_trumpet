@@ -196,12 +196,15 @@ This is the part that must work when nothing else does.
   raised, the warning appears in the web UI and a cooldown starts. This fires
   even if the MIDI note never ends — a stuck note, a crashed sequencer or an
   unplugged cable cannot cook a coil.
-* **Duty cycle ceiling.** A rolling window (2–20 s, derived from `maxOnMs`)
-  measures the ON ratio. Past the ceiling the coil is released and the same
-  cooldown applies. The ceiling is only enforced once the window holds at
-  least two seconds of history: a coil that has just been energised is
-  legitimately at 100 % duty, and firing on the first note would make the
-  instrument unplayable.
+* **Thermal ceiling.** A rolling window (2–20 s, derived from `maxOnMs`)
+  integrates the *heating*, not the wall-clock ON time. A coil is an inductor,
+  so the PWM current is smoothed and the dissipation goes as I²R: the load is
+  accumulated as `duty² · dt` and reported back as the equivalent continuous
+  duty. Holding at 35 % reads as 35 %, which is the whole reason the hold level
+  exists. Past the ceiling the coil is released and the same cooldown applies.
+  The ceiling is only enforced once the window holds at least two seconds of
+  history: a coil that has just been energised is legitimately at 100 % duty,
+  and firing on the first note would make the instrument unplayable.
 * **Cooldown.** While it runs the coil stays off even though the note is still
   held. When it expires, if the note is *still* held, one fresh pull-in is
   allowed.
@@ -212,11 +215,74 @@ This is the part that must work when nothing else does.
 All of this is pure logic in `SolenoidSafety`, with no hardware call, and is
 covered by the host test suite — including the stuck-note case.
 
-> Two bugs were found here by those tests and fixed: the class used `0` as an
-> "unset" timestamp sentinel, which silently disabled the duty accounting when
-> a coil was energised at millisecond 0 (right after boot, and again every
-> 49.7 days when the counter wraps); and the duty window was enforced from the
-> first millisecond, which tripped the guard on the very first note.
+Three quantities are tracked separately, because conflating them is how this
+guard gets it wrong:
+
+```
+continuous ON time    how long the plunger has been down, at any PWM level
+applied duty          100 % during pull-in, holdPwm afterwards
+thermal load          integral of duty² · dt over the window
+```
+
+> Four bugs have been found here and fixed. Two by the host tests: the class
+> used `0` as an "unset" timestamp sentinel, which silently disabled the duty
+> accounting when a coil was energised at millisecond 0 (right after boot, and
+> again every 49.7 days when the counter wraps); and the duty window was
+> enforced from the first millisecond, which tripped the guard on the very
+> first note.
+>
+> Two more by review: the ceiling counted a coil at 35 % hold PWM as 100 %
+> duty, so any note longer than about two seconds failed with `OVER_DUTY` even
+> though the hold level exists precisely to allow it; and the continuous-ON
+> timestamp was reset every time the observation window slid, so a solenoid
+> configured at the validator's own upper bound of `maxOnMs = 20000` never
+> reached its limit at all. Both now have regression tests
+> (`test_solenoid_hold_level_is_not_counted_as_full_duty`,
+> `test_solenoid_max_on_time_survives_the_window_sliding`).
+
+## Attack synchronisation
+
+A servo swinging 40° → 88° at 900 °/s is already ~53 ms behind the Note-On, and
+a solenoid does not have its plunger home until its pull-in burst is over. The
+sound engine and the valve engine receive the same Note-On at the same instant,
+so starting the attack immediately means the first tens of milliseconds of
+every note are played through the **previous fingering** — through a bore that
+is physically the wrong length. On a normal loudspeaker that would not matter;
+here the pistons *are* the resonator.
+
+The engine therefore holds the attack for as long as the actuators need:
+
+```
+settle time per valve   servo    |pressed − released| / speed  + 12 ms margin
+                        solenoid pullInMs                      + 12 ms margin
+                        measured a bench figure always wins
+
+delay for a note        the slowest valve that actually has to move
+                        (they move together, so the delays do not add up)
+                        + trim, capped at the ceiling
+```
+
+Only the valves whose state differs are considered, so slurring to a note on
+the same combination costs nothing. The whole calculation is in
+`src/valves/ValveTiming.cpp` — no hardware, no timers — and the engine applies
+it at block boundaries (2.7 ms at 48 kHz / 128 frames).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `enabled` | on | wait for the pistons at all |
+| `onlyWhenFingeringChanges` | on | a repeated combination is not delayed |
+| `trimMs` | 0 | bench correction, may be negative |
+| `maxDelayMs` | 120 | hard ceiling, whatever the arithmetic says |
+
+Settings → Pistons shows the estimate for the slowest piston as configured, and
+the diagnostics page reports the delay the last note actually waited, so the
+mechanism can be seen working rather than taken on trust.
+
+The 12 ms margin covers linkage slop and stiction and is a guess; that is what
+`measuredSettleMs` and `trimMs` are for. **Time a piston at the bench and enter
+the figure** — the estimate ignores load entirely.
+
+![Attack synchronisation](../img/screenshots/settings-valve-sync.png)
 
 ## PANIC
 

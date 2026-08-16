@@ -312,6 +312,9 @@ void HttpServerModule::handleDiagnostics() {
     doc["cpuLoad"] = s.audioCpuPercent;
     doc["audioUnderruns"] = s.audioUnderruns;
     doc["audioBlocks"] = app_->audioBlocks();
+    // How long the last note waited for the pistons, so the bench can see the
+    // synchronisation working rather than take it on trust.
+    doc["attackDelayMs"] = app_->audio().lastAttackDelayMs();
     doc["audioSampleRate"] = app_->backend() ? app_->backend()->sampleRate() : 0;
     doc["audioBackend"] = app_->backend() ? app_->backend()->name() : "NONE";
     doc["audioMaturity"] =
@@ -936,6 +939,9 @@ void HttpServerModule::handlePutFingering() {
         return;
     }
     FingeringEngine& engine = app_->valves().fingering();
+    // The sound engine keeps its own copy so it knows which pistons move for
+    // the next note; both have to see the same chart.
+    FingeringEngine& audioChart = app_->audio().fingering();
     uint16_t applied = 0;
     for (JsonObjectConst o : doc["notes"].as<JsonArrayConst>()) {
         const int written = o["written"] | -1;
@@ -948,6 +954,9 @@ void HttpServerModule::handlePutFingering() {
                                               : static_cast<uint8_t>(alternate))) {
             ++applied;
         }
+        audioChart.setFingering(static_cast<uint8_t>(written),
+                                primary < 0 ? kNoFingering : static_cast<uint8_t>(primary),
+                                alternate < 0 ? kNoFingering : static_cast<uint8_t>(alternate));
     }
     JsonDocument out;
     out["ok"] = true;
@@ -962,6 +971,7 @@ void HttpServerModule::handlePutFingering() {
 
 void HttpServerModule::handleResetFingering() {
     app_->valves().fingering().resetToDefault();
+    app_->audio().fingering().resetToDefault();
     sendOk();
 }
 

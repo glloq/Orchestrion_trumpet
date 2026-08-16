@@ -54,8 +54,8 @@ deliberately small, and everything rare or dangerous is one level down.
 |---|---|
 | **Device** | Instrument name, Wi-Fi state, network picker with a live scan, fallback hotspot, captive portal, mDNS. |
 | **MIDI** | Which interfaces are on, the routing matrix, the per-route filters (channel, transpose, velocity curve, note range), pitch bend range, loop suppression. |
-| **Audio** | Backend → amplifier → speaker → coupling, sample rate, bit depth, limiter, generator, envelope and vibrato, and — folded away — the I²S / I²C pins, DMA and limiter internals. |
-| **Pistons** | Valve count, mode, per-valve actuator, driver, GPIO or PCA9685 channel, angles, speed, solenoid timing, plus test pulse and go-released / go-pressed. |
+| **Audio** | Backend → amplifier → speaker → coupling, sample rate, bit depth, limiter, generator, envelope and vibrato, and — folded away — the chamber/cone geometry with what the model derives from it, the I²S / I²C pins, DMA and limiter internals. |
+| **Pistons** | Valve count, mode, per-valve actuator, driver, GPIO or PCA9685 channel, angles, speed, solenoid timing, attack synchronisation, plus test pulse and go-released / go-pressed. |
 | **Diagnostics** | Firmware, memory, audio, MIDI and valve state, and the MIDI monitor with pause, clear and per-source / per-type filters. |
 | **Firmware** | Version, OTA upload with progress, reboot, factory reset. |
 
@@ -150,9 +150,11 @@ exported and imported:
 |---|---|
 | ![Device](../img/screenshots/settings-device.png) | ![Network picker](../img/screenshots/settings-network.png) |
 | ![MIDI](../img/screenshots/settings-midi.png) | ![Routing matrix](../img/screenshots/settings-routing.png) |
-| ![Audio](../img/screenshots/settings-audio.png) | ![Pins and DMA](../img/screenshots/settings-pins.png) |
-| ![Pistons](../img/screenshots/settings-pistons.png) | ![Diagnostics](../img/screenshots/settings-diagnostics.png) |
-| ![MIDI monitor](../img/screenshots/settings-midi-monitor.png) | ![Firmware](../img/screenshots/settings-firmware.png) |
+| ![Audio](../img/screenshots/settings-audio.png) | ![Coupling geometry](../img/screenshots/settings-acoustic.png) |
+| ![Derived figures](../img/screenshots/settings-acoustic-derived.png) | ![Pins and DMA](../img/screenshots/settings-pins.png) |
+| ![Pistons](../img/screenshots/settings-pistons.png) | ![Attack synchronisation](../img/screenshots/settings-valve-sync.png) |
+| ![Diagnostics](../img/screenshots/settings-diagnostics.png) | ![Firmware](../img/screenshots/settings-firmware.png) |
+| ![MIDI monitor](../img/screenshots/settings-midi-monitor.png) | |
 
 ### Wizard, and on a phone
 

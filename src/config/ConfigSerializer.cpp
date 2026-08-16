@@ -32,6 +32,19 @@ void readBool(JsonVariantConst v, bool& out) {
     if (v.is<bool>()) out = v.as<bool>();
 }
 
+void readHornStage(JsonObjectConst o, HornStageConfig& h) {
+    if (o.isNull()) return;
+    readNumber(o["inletDiameterMm"], h.inletDiameterMm);
+    readNumber(o["outletDiameterMm"], h.outletDiameterMm);
+    readNumber(o["lengthMm"], h.lengthMm);
+}
+
+void writeHornStage(JsonObject o, const HornStageConfig& h) {
+    o["inletDiameterMm"] = h.inletDiameterMm;
+    o["outletDiameterMm"] = h.outletDiameterMm;
+    o["lengthMm"] = h.lengthMm;
+}
+
 void readI2s(JsonObjectConst o, I2sPins& p) {
     if (o.isNull()) return;
     readNumber(o["bclk"], p.bclk);
@@ -160,18 +173,26 @@ void configToJson(const InstrumentConfiguration& cfg, JsonObject root, SecretPol
     spk["name"] = cfg.speaker.name;
     spk["impedance"] = cfg.speaker.impedanceOhm;
     spk["powerRms"] = cfg.speaker.powerRmsW;
+    spk["powerMax"] = cfg.speaker.powerMaxW;
     spk["minFrequency"] = cfg.speaker.minFrequencyHz;
     spk["maxFrequency"] = cfg.speaker.maxFrequencyHz;
     spk["recommendedHighPass"] = cfg.speaker.recommendedHighPassHz;
     spk["gainCorrectionDb"] = cfg.speaker.gainCorrectionDb;
     spk["powerLimit"] = cfg.speaker.powerLimitW;
+    spk["fsHz"] = cfg.speaker.fsHz;
+    spk["vasLitres"] = cfg.speaker.vasLitres;
 
     JsonObject aco = root["acoustic"].to<JsonObject>();
     aco["coupling"] = toString(cfg.acoustic.coupling);
-    aco["chamberVolumeMl"] = cfg.acoustic.chamberVolumeMl;
-    aco["outletDiameterMm"] = cfg.acoustic.outletDiameterMm;
-    aco["outletLengthMm"] = cfg.acoustic.outletLengthMm;
-    aco["highPassHz"] = cfg.acoustic.highPassHz;
+    aco["rearChamberVolumeMl"] = cfg.acoustic.rearChamberVolumeMl;
+    aco["frontChamberVolumeMl"] = cfg.acoustic.frontChamberVolumeMl;
+    aco["frontChamberDepthMm"] = cfg.acoustic.frontChamberDepthMm;
+    writeHornStage(aco["stage1"].to<JsonObject>(), cfg.acoustic.stage1);
+    aco["intermediateDiameterMm"] = cfg.acoustic.intermediateDiameterMm;
+    aco["intermediateLengthMm"] = cfg.acoustic.intermediateLengthMm;
+    writeHornStage(aco["stage2"].to<JsonObject>(), cfg.acoustic.stage2);
+    aco["leadpipeDiameterMm"] = cfg.acoustic.leadpipeDiameterMm;
+    aco["measuredHighPassHz"] = cfg.acoustic.measuredHighPassHz;
     aco["eqGainDb"] = cfg.acoustic.eqGainDb;
 
     JsonObject valves = root["valves"].to<JsonObject>();
@@ -182,6 +203,12 @@ void configToJson(const InstrumentConfiguration& cfg, JsonObject root, SecretPol
     valves["servoFrequencyHz"] = cfg.valves.servoFrequencyHz;
     valves["solenoidPwmFrequencyHz"] = cfg.valves.solenoidPwmFrequencyHz;
     writeI2c(valves["pca9685I2c"].to<JsonObject>(), cfg.valves.pca9685I2c);
+
+    JsonObject sync = valves["sync"].to<JsonObject>();
+    sync["enabled"] = cfg.valves.sync.enabled;
+    sync["onlyWhenFingeringChanges"] = cfg.valves.sync.onlyWhenFingeringChanges;
+    sync["trimMs"] = cfg.valves.sync.trimMs;
+    sync["maxDelayMs"] = cfg.valves.sync.maxDelayMs;
 
     JsonArray items = valves["items"].to<JsonArray>();
     for (uint8_t i = 0; i < kMaxValves; ++i) {
@@ -208,6 +235,7 @@ void configToJson(const InstrumentConfiguration& cfg, JsonObject root, SecretPol
         o["cooldownMs"] = v.cooldownMs;
         o["maxDutyPercent"] = v.maxDutyPercent;
         o["cc"] = v.ccNumber;
+        o["measuredSettleMs"] = v.measuredSettleMs;
     }
 
     JsonObject inst = root["instrument"].to<JsonObject>();
@@ -361,6 +389,9 @@ bool configFromJson(JsonObjectConst root, InstrumentConfiguration& cfg) {
     readString(spk["name"], cfg.speaker.name, sizeof(cfg.speaker.name));
     readNumber(spk["impedance"], cfg.speaker.impedanceOhm);
     readNumber(spk["powerRms"], cfg.speaker.powerRmsW);
+    readNumber(spk["powerMax"], cfg.speaker.powerMaxW);
+    readNumber(spk["fsHz"], cfg.speaker.fsHz);
+    readNumber(spk["vasLitres"], cfg.speaker.vasLitres);
     readNumber(spk["minFrequency"], cfg.speaker.minFrequencyHz);
     readNumber(spk["maxFrequency"], cfg.speaker.maxFrequencyHz);
     readNumber(spk["recommendedHighPass"], cfg.speaker.recommendedHighPassHz);
@@ -369,11 +400,24 @@ bool configFromJson(JsonObjectConst root, InstrumentConfiguration& cfg) {
 
     JsonObjectConst aco = root["acoustic"];
     readEnum(aco["coupling"], cfg.acoustic.coupling);
-    readNumber(aco["chamberVolumeMl"], cfg.acoustic.chamberVolumeMl);
-    readNumber(aco["outletDiameterMm"], cfg.acoustic.outletDiameterMm);
-    readNumber(aco["outletLengthMm"], cfg.acoustic.outletLengthMm);
-    readNumber(aco["highPassHz"], cfg.acoustic.highPassHz);
+    readNumber(aco["rearChamberVolumeMl"], cfg.acoustic.rearChamberVolumeMl);
+    readNumber(aco["frontChamberVolumeMl"], cfg.acoustic.frontChamberVolumeMl);
+    readNumber(aco["frontChamberDepthMm"], cfg.acoustic.frontChamberDepthMm);
+    readHornStage(aco["stage1"], cfg.acoustic.stage1);
+    readNumber(aco["intermediateDiameterMm"], cfg.acoustic.intermediateDiameterMm);
+    readNumber(aco["intermediateLengthMm"], cfg.acoustic.intermediateLengthMm);
+    readHornStage(aco["stage2"], cfg.acoustic.stage2);
+    readNumber(aco["leadpipeDiameterMm"], cfg.acoustic.leadpipeDiameterMm);
+    readNumber(aco["measuredHighPassHz"], cfg.acoustic.measuredHighPassHz);
     readNumber(aco["eqGainDb"], cfg.acoustic.eqGainDb);
+    // v2 files: one chamber volume, one outlet, one hand-entered high pass.
+    // Map them onto the new geometry rather than dropping them silently.
+    readNumber(aco["chamberVolumeMl"], cfg.acoustic.rearChamberVolumeMl);
+    readNumber(aco["outletDiameterMm"], cfg.acoustic.leadpipeDiameterMm);
+    if (!aco["outletLengthMm"].isNull()) {
+        readNumber(aco["outletLengthMm"], cfg.acoustic.stage2.lengthMm);
+    }
+    readNumber(aco["highPassHz"], cfg.acoustic.measuredHighPassHz);
 
     JsonObjectConst valves = root["valves"];
     readNumber(valves["count"], cfg.valves.count);
@@ -383,6 +427,12 @@ bool configFromJson(JsonObjectConst root, InstrumentConfiguration& cfg) {
     readNumber(valves["servoFrequencyHz"], cfg.valves.servoFrequencyHz);
     readNumber(valves["solenoidPwmFrequencyHz"], cfg.valves.solenoidPwmFrequencyHz);
     readI2c(valves["pca9685I2c"], cfg.valves.pca9685I2c);
+
+    JsonObjectConst sync = valves["sync"];
+    readBool(sync["enabled"], cfg.valves.sync.enabled);
+    readBool(sync["onlyWhenFingeringChanges"], cfg.valves.sync.onlyWhenFingeringChanges);
+    readNumber(sync["trimMs"], cfg.valves.sync.trimMs);
+    readNumber(sync["maxDelayMs"], cfg.valves.sync.maxDelayMs);
     if (cfg.valves.count > kMaxValves) cfg.valves.count = kMaxValves;
 
     JsonArrayConst items = valves["items"];
@@ -410,6 +460,7 @@ bool configFromJson(JsonObjectConst root, InstrumentConfiguration& cfg) {
         readNumber(o["cooldownMs"], v.cooldownMs);
         readNumber(o["maxDutyPercent"], v.maxDutyPercent);
         readNumber(o["cc"], v.ccNumber);
+        readNumber(o["measuredSettleMs"], v.measuredSettleMs);
     }
 
     JsonObjectConst inst = root["instrument"];

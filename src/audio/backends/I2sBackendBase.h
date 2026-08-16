@@ -45,6 +45,8 @@ protected:
     // Hooks for the concrete backends.
     virtual bool preparePeripheral() { return true; }   // before I2S starts
     virtual bool startCodec() { return true; }          // after I2S starts
+    // Called on every teardown path, including a begin() that failed halfway
+    // through startCodec(), so it must tolerate a partially configured codec.
     virtual void stopCodec() {}
     virtual void applyMute(bool state) {}
     // 16, 24 or 32; the base class clamps the requested depth to this.
@@ -57,6 +59,9 @@ protected:
     uint8_t bitDepth_ = 16;
     bool muted_ = true;
     bool running_ = false;
+    bool codecStarted_ = false;
+    bool txEnabled_ = false;
+    bool rxEnabled_ = false;
     uint32_t underruns_ = 0;
     char error_[64] = "";
 

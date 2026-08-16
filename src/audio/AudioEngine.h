@@ -26,6 +26,7 @@
 #include "midi/IMidiTransport.h"
 #include "midi/NoteStack.h"
 #include "valves/FingeringEngine.h"
+#include "valves/ValveTiming.h"
 
 namespace ot {
 
@@ -50,9 +51,11 @@ struct AudioEngineStatus {
 
 class AudioEngine final : public IAudioEngine, public IMidiSink {
 public:
+    // `valves` is used for one thing only: knowing how long the pistons need
+    // before the note is worth playing.  The engine never drives them.
     void configure(const AudioConfig& audio, const SpeakerConfig& speaker,
                    const AmplifierConfig& amplifier, const AcousticConfig& acoustic,
-                   const InstrumentConfig& instrument);
+                   const InstrumentConfig& instrument, const ValvesConfig& valves);
 
     bool begin() override;
     void renderBlock(float* out, size_t frames) override;
@@ -74,6 +77,13 @@ public:
     bool testSignalActive() const { return testSignal_ != TestSignal::NONE; }
 
     AudioEngineStatus status() const;
+    // Milliseconds the current note waited for the pistons; 0 when the note
+    // started immediately.  Reported on the diagnostics page.
+    uint16_t lastAttackDelayMs() const { return lastAttackDelayMs_; }
+    // The engine keeps its own copy of the chart so it can tell which pistons
+    // have to move for the next note.  Edits from the web UI are mirrored into
+    // it, otherwise the delay would be computed from a stale table.
+    FingeringEngine& fingering() { return transposer_; }
     // Pitch actually being produced, in fractional MIDI note units.
     float livePitch() const { return livePitch_; }
     float safePeakScale() const { return limiter_.peakScale(); }
@@ -81,6 +91,15 @@ public:
 
 private:
     void handleMessage(const MidiMessage& msg);
+    // Articulation, split out so it can be deferred until the pistons arrive.
+    struct PendingArticulation {
+        bool active = false;
+        bool fromSilence = false;
+        uint32_t samples = 0;      // remaining delay
+    };
+    void startArticulation(bool fromSilence);
+    void schedulePendingArticulation(size_t frames);
+    uint32_t valveDelaySamples(uint8_t soundingNote);
     void updateControlRate();
     void rebuildFilters();
     float blowAmount() const;
@@ -88,9 +107,11 @@ private:
     // ---- configuration -----------------------------------------------------
     AudioConfig cfg_;
     InstrumentConfig instrument_;
+    SpeakerConfig speakerCfg_;
     SpeakerProfile speaker_;
     AmplifierProfile amplifier_;
     AcousticConfig acoustic_;
+    ValvesConfig valves_;
     FingeringEngine transposer_;
     uint32_t sampleRate_ = 48000;
 
@@ -118,6 +139,10 @@ private:
     uint32_t vibratoDelaySamples_ = 0;
     uint32_t vibratoFadeSamples_ = 0;
     uint32_t noteAgeSamples_ = 0;
+    // Fingering the pistons are currently holding, so the next note knows
+    // which of them actually has to move.
+    uint8_t currentValveMask_ = 0;
+    PendingArticulation pending_;
     uint16_t controlCounter_ = 0;
     float peakLevel_ = 0.0f;
     float masterVolume_ = 0.75f;
@@ -132,6 +157,7 @@ private:
     int16_t pitchBendRaw_ = 0;
     uint8_t currentVelocity_ = 0;
 
+    uint16_t lastAttackDelayMs_ = 0;
     bool muted_ = true;      // boots muted, unmuted at the end of the sequence
     bool started_ = false;
 

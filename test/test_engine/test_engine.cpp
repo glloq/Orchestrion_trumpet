@@ -23,10 +23,14 @@ struct Rig {
         ConfigManager::makeDefaults(cfg);
         cfg.audio.startupMute = false;
         cfg.audio.vibrato.source = VibratoSource::OFF;
+        // Most of these tests are about the DSP, not about the pistons: the
+        // attack delay is exercised on its own in test_valve_sync.
+        cfg.valves.sync.enabled = false;
     }
 
     void start() {
-        engine.configure(cfg.audio, cfg.speaker, cfg.amplifier, cfg.acoustic, cfg.instrument);
+        engine.configure(cfg.audio, cfg.speaker, cfg.amplifier, cfg.acoustic, cfg.instrument,
+                         cfg.valves);
         engine.begin();
         engine.setMuted(false);
     }
@@ -232,6 +236,99 @@ void test_engine_test_tone_and_sweep(void) {
     TEST_ASSERT_TRUE(rig.peakOver(30) > 0.05f);
 }
 
+// ---------------------------------------------------------------------------
+// Valve -> audio synchronisation
+//
+// The pistons change the resonator, so a note that starts before they have
+// arrived is played through the wrong bore.  The engine holds the attack for
+// exactly as long as the actuators need, and not a millisecond longer.
+// ---------------------------------------------------------------------------
+void test_engine_waits_for_the_pistons_before_speaking(void) {
+    Rig rig;
+    rig.cfg.valves.sync.enabled = true;
+    rig.cfg.valves.sync.maxDelayMs = 500;
+    for (uint8_t i = 0; i < rig.cfg.valves.count; ++i) {
+        rig.cfg.valves.items[i].type = ValveActuatorType::SERVO;
+        rig.cfg.valves.items[i].releasedAngle = 40;
+        rig.cfg.valves.items[i].pressedAngle = 88;
+        rig.cfg.valves.items[i].speedDegPerSec = 900;    // ~65 ms with margin
+    }
+    rig.start();
+
+    // Concert E4 is written F#4 on a Bb trumpet: valve 2 has to come down.
+    // onMidi() only queues; the message is handled at the next block boundary.
+    rig.engine.onMidi(MidiMessage::noteOn(1, 64, 100));
+    rig.render(1);
+    TEST_ASSERT_TRUE(rig.engine.lastAttackDelayMs() > 40);
+    TEST_ASSERT_TRUE(rig.engine.lastAttackDelayMs() < 120);
+
+    // 10 blocks is 27 ms at 48 kHz: the pistons are still moving.
+    TEST_ASSERT_FLOAT_WITHIN(0.0005f, 0.0f, rig.peakOver(10));
+    // By 100 ms they have arrived and the note speaks.
+    TEST_ASSERT_TRUE(rig.peakOver(60) > 0.01f);
+}
+
+void test_engine_does_not_wait_when_the_fingering_is_unchanged(void) {
+    Rig rig;
+    rig.cfg.valves.sync.enabled = true;
+    rig.cfg.valves.sync.onlyWhenFingeringChanges = true;
+    rig.start();
+
+    // Two notes that share a valve combination - the chart itself decides
+    // which, so this stays true if the chart is edited.
+    FingeringEngine& chart = rig.engine.fingering();
+    int first = -1, second = -1;
+    for (int n = 52; n <= 80 && second < 0; ++n) {
+        const uint8_t a = chart.fingeringForMidiNote(static_cast<uint8_t>(n));
+        if (a == kNoFingering) continue;
+        for (int m = n + 1; m <= 84; ++m) {
+            if (chart.fingeringForMidiNote(static_cast<uint8_t>(m)) == a) {
+                first = n;
+                second = m;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(second > 0, "the chart has no two notes sharing a fingering");
+
+    rig.engine.onMidi(MidiMessage::noteOn(1, static_cast<uint8_t>(first), 100));
+    rig.render(80);   // let the pistons arrive and the note speak
+
+    // Slurring to a note on the same combination: nothing has to move, so the
+    // second note must not be delayed at all.
+    rig.engine.onMidi(MidiMessage::noteOn(1, static_cast<uint8_t>(second), 100));
+    rig.render(1);
+    TEST_ASSERT_EQUAL_UINT16(0, rig.engine.lastAttackDelayMs());
+}
+
+void test_engine_never_waits_when_synchronisation_is_off(void) {
+    Rig rig;
+    rig.cfg.valves.sync.enabled = false;
+    rig.start();
+    rig.engine.onMidi(MidiMessage::noteOn(1, 64, 100));
+    rig.render(1);
+    TEST_ASSERT_EQUAL_UINT16(0, rig.engine.lastAttackDelayMs());
+    TEST_ASSERT_TRUE(rig.peakOver(20) > 0.005f);
+}
+
+void test_engine_cancels_a_pending_note_that_is_released_first(void) {
+    Rig rig;
+    rig.cfg.valves.sync.enabled = true;
+    rig.cfg.valves.sync.maxDelayMs = 500;
+    for (uint8_t i = 0; i < rig.cfg.valves.count; ++i) {
+        rig.cfg.valves.items[i].type = ValveActuatorType::SERVO;
+        rig.cfg.valves.items[i].speedDegPerSec = 120;    // deliberately slow
+    }
+    rig.start();
+
+    rig.engine.onMidi(MidiMessage::noteOn(1, 64, 100));
+    rig.render(2);
+    // Released long before the pistons arrive: a staccato note shorter than
+    // the travel must not fire the attack after the note is already over.
+    rig.engine.onMidi(MidiMessage::noteOff(1, 64));
+    TEST_ASSERT_FLOAT_WITHIN(0.0005f, 0.0f, rig.peakOver(200));
+}
+
 int main(int, char**) {
     initBoardCaps();
     UNITY_BEGIN();
@@ -249,5 +346,9 @@ int main(int, char**) {
     RUN_TEST(test_engine_transposes_written_pitch);
     RUN_TEST(test_engine_output_never_exceeds_the_safe_peak);
     RUN_TEST(test_engine_test_tone_and_sweep);
+    RUN_TEST(test_engine_waits_for_the_pistons_before_speaking);
+    RUN_TEST(test_engine_does_not_wait_when_the_fingering_is_unchanged);
+    RUN_TEST(test_engine_never_waits_when_synchronisation_is_off);
+    RUN_TEST(test_engine_cancels_a_pending_note_that_is_released_first);
     return UNITY_END();
 }

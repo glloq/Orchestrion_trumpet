@@ -9,6 +9,7 @@
 #include "audio/AdditiveSynth.h"
 #include "audio/Envelope.h"
 #include "audio/Filters.h"
+#include "audio/AcousticModel.h"
 #include "audio/Limiter.h"
 #include "audio/Oscillator.h"
 #include "audio/Profiles.h"
@@ -25,13 +26,13 @@ void tearDown() {}
 // ---------------------------------------------------------------------------
 void test_protection_derates_an_oversized_amplifier(void) {
     SpeakerConfig speaker;
-    applySpeakerProfileDefaults(SpeakerProfileId::VISATON_FRS5_XTS, speaker);   // 5 W limit
+    applySpeakerProfileDefaults(SpeakerProfileId::VISATON_FRS5_XTS, speaker);   // 4 W limit
     AmplifierConfig amp;
     applyAmplifierDefaults(AmplifierType::TPA3118D2, amp);                      // 25 W
 
     const float scale = SpeakerProtection::safePeakScale(speaker, amp);
-    // sqrt(5/25) = 0.447: the DSP may only use 45% of full scale.
-    TEST_ASSERT_FLOAT_WITHIN(0.02f, 0.447f, scale);
+    // sqrt(4/25) = 0.4: the DSP may only use 40% of full scale.
+    TEST_ASSERT_FLOAT_WITHIN(0.02f, 0.4f, scale);
     TEST_ASSERT_TRUE(scale > 0.0f && scale < 1.0f);
 }
 
@@ -364,6 +365,121 @@ void test_backend_q31_default_narrows_to_16_bit(void) {
     TEST_ASSERT_INT32_WITHIN(2, 32767, backend.peak);
 }
 
+
+// ---------------------------------------------------------------------------
+// Speaker catalogue.  These figures come from the manufacturers' datasheets;
+// the point of pinning them is that a protection limit above the continuous
+// rating is a real hazard, and it had shipped once already.
+// ---------------------------------------------------------------------------
+void test_catalogue_never_allows_more_than_the_rms_rating(void) {
+    const SpeakerProfileId ids[] = {
+        SpeakerProfileId::VISATON_FRS5_XTS, SpeakerProfileId::DAYTON_CE70PR4,
+        SpeakerProfileId::VISATON_FRS8M, SpeakerProfileId::MONACOR_SPX30M,
+        SpeakerProfileId::CUSTOM};
+    for (SpeakerProfileId id : ids) {
+        SpeakerConfig s;
+        applySpeakerProfileDefaults(id, s);
+        TEST_ASSERT_TRUE(s.powerLimitW > 0.0f);
+        TEST_ASSERT_TRUE_MESSAGE(s.powerLimitW <= s.powerRmsW,
+                                 "the protection limit is above the RMS rating");
+        TEST_ASSERT_TRUE_MESSAGE(s.powerRmsW <= s.powerMaxW,
+                                 "the RMS rating is above the maximum rating");
+    }
+}
+
+void test_catalogue_figures_match_the_datasheets(void) {
+    SpeakerConfig s;
+
+    applySpeakerProfileDefaults(SpeakerProfileId::MONACOR_SPX30M, s);
+    // 20 W RMS / 40 W max, 8 ohm.  The old table claimed 30 W RMS and allowed
+    // 22 W, i.e. more than the coil is specified to take continuously.
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 20.0f, s.powerRmsW);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 40.0f, s.powerMaxW);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 8.0f, s.impedanceOhm);
+    TEST_ASSERT_TRUE(s.powerLimitW <= 15.0f);
+
+    applySpeakerProfileDefaults(SpeakerProfileId::VISATON_FRS5_XTS, s);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 5.0f, s.powerRmsW);    // rated, not maximum
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 8.0f, s.powerMaxW);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 120.0f, s.minFrequencyHz);
+
+    applySpeakerProfileDefaults(SpeakerProfileId::DAYTON_CE70PR4, s);
+    TEST_ASSERT_EQUAL_STRING("Dayton CE70PR-4", s.name);   // CE70P-4 does not exist
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 20.0f, s.powerRmsW);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 4.0f, s.impedanceOhm);
+
+    applySpeakerProfileDefaults(SpeakerProfileId::VISATON_FRS8M, s);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 30.0f, s.powerRmsW);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 50.0f, s.powerMaxW);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 125.0f, s.fsHz);
+}
+
+// ---------------------------------------------------------------------------
+// Acoustic model
+// ---------------------------------------------------------------------------
+void test_acoustic_model_reports_the_compression_ratio(void) {
+    AcousticConfig a;              // reference geometry: 60 mm cone, 11 mm bore
+    SpeakerConfig s;
+    applySpeakerProfileDefaults(SpeakerProfileId::VISATON_FRS8M, s);
+    const AcousticModel m = computeAcousticModel(a, s);
+
+    // (60/11)^2 = 29.8 ... the reference build compresses hard, and the
+    // validator is expected to say so.
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 29.75f, m.compressionRatio);
+    TEST_ASSERT_TRUE(m.frontChamberCornerHz > 0.0f);
+    TEST_ASSERT_TRUE(m.stage1HalfAngleDeg > 0.0f && m.stage1HalfAngleDeg < 45.0f);
+}
+
+void test_acoustic_model_never_invents_a_sealed_resonance(void) {
+    AcousticConfig a;
+    SpeakerConfig s;
+    applySpeakerProfileDefaults(SpeakerProfileId::VISATON_FRS8M, s);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, s.vasLitres);   // not transcribed
+
+    AcousticModel m = computeAcousticModel(a, s);
+    TEST_ASSERT_FALSE(m.sealedResonanceKnown);
+    TEST_ASSERT_EQUAL(static_cast<int>(AcousticSource::SPEAKER_PROFILE),
+                      static_cast<int>(m.highPassSource));
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, s.recommendedHighPassHz, m.highPassHz);
+
+    // Once the builder enters fs and Vas the model uses them.
+    s.fsHz = 125.0f;
+    s.vasLitres = 1.4f;
+    a.rearChamberVolumeMl = 120.0f;   // 0.12 litre
+    m = computeAcousticModel(a, s);
+    TEST_ASSERT_TRUE(m.sealedResonanceKnown);
+    // 125 * sqrt(1 + 1.4/0.12) = 446 Hz
+    TEST_ASSERT_FLOAT_WITHIN(2.0f, 446.0f, m.sealedResonanceHz);
+    TEST_ASSERT_EQUAL(static_cast<int>(AcousticSource::DERIVED),
+                      static_cast<int>(m.highPassSource));
+}
+
+void test_acoustic_model_prefers_a_measured_figure(void) {
+    AcousticConfig a;
+    SpeakerConfig s;
+    applySpeakerProfileDefaults(SpeakerProfileId::VISATON_FRS8M, s);
+    s.fsHz = 125.0f;
+    s.vasLitres = 1.4f;
+    a.measuredHighPassHz = 190.0f;
+
+    const AcousticModel m = computeAcousticModel(a, s);
+    // A bench measurement beats the model, always.
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 190.0f, m.highPassHz);
+    TEST_ASSERT_EQUAL(static_cast<int>(AcousticSource::MEASURED),
+                      static_cast<int>(m.highPassSource));
+}
+
+void test_acoustic_model_is_inert_in_open_air(void) {
+    AcousticConfig a;
+    a.coupling = AcousticCouplingType::OPEN_AIR;
+    SpeakerConfig s;
+    const AcousticModel m = computeAcousticModel(a, s);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, m.highPassHz);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, m.gainDb);
+    TEST_ASSERT_EQUAL(static_cast<int>(AcousticSource::NOT_APPLICABLE),
+                      static_cast<int>(m.highPassSource));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_protection_derates_an_oversized_amplifier);
@@ -389,5 +505,11 @@ int main(int, char**) {
     RUN_TEST(test_silent_generator_when_no_frequency);
     RUN_TEST(test_mock_backend_contract);
     RUN_TEST(test_backend_q31_default_narrows_to_16_bit);
+    RUN_TEST(test_catalogue_never_allows_more_than_the_rms_rating);
+    RUN_TEST(test_catalogue_figures_match_the_datasheets);
+    RUN_TEST(test_acoustic_model_reports_the_compression_ratio);
+    RUN_TEST(test_acoustic_model_never_invents_a_sealed_resonance);
+    RUN_TEST(test_acoustic_model_prefers_a_measured_figure);
+    RUN_TEST(test_acoustic_model_is_inert_in_open_air);
     return UNITY_END();
 }

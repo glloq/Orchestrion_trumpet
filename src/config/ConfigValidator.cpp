@@ -3,7 +3,9 @@
 #include <cstdarg>
 #include <cstdio>
 
+#include "audio/AcousticModel.h"
 #include "audio/Limiter.h"
+#include "valves/ValveTiming.h"
 
 namespace ot {
 
@@ -203,11 +205,76 @@ void ConfigValidator::validate(const InstrumentConfiguration& cfg, const BoardCa
                     "the protection stage will keep the output below %.0f%% of full scale",
                     static_cast<double>(peakScale * 100.0f));
     }
-    if (cfg.acoustic.coupling != AcousticCouplingType::OPEN_AIR &&
-        cfg.acoustic.highPassHz < cfg.speaker.minFrequencyHz) {
-        formatIssue(out, Severity::WARNING, "acoustic.highPassHz",
-                    "the chamber high pass (%.0f Hz) is below what the speaker can reproduce",
-                    static_cast<double>(cfg.acoustic.highPassHz));
+    if (cfg.speaker.powerMaxW > 0.05f && cfg.speaker.powerRmsW > cfg.speaker.powerMaxW) {
+        formatIssue(out, Severity::ERROR, "speaker.powerRms",
+                    "the continuous rating (%.1f W) is above the maximum rating (%.1f W)",
+                    static_cast<double>(cfg.speaker.powerRmsW),
+                    static_cast<double>(cfg.speaker.powerMaxW));
+    }
+
+    // ------------------------------------------------------------- acoustic
+    if (cfg.acoustic.coupling != AcousticCouplingType::OPEN_AIR) {
+        const AcousticModel model = computeAcousticModel(cfg.acoustic, cfg.speaker);
+
+        if (model.highPassHz < cfg.speaker.minFrequencyHz) {
+            formatIssue(out, Severity::WARNING, "acoustic.measuredHighPassHz",
+                        "the chamber high pass (%.0f Hz) is below what the speaker can reproduce",
+                        static_cast<double>(model.highPassHz));
+        }
+        // A compression ratio much under 2:1 wastes the chamber; much over
+        // 10:1 and the throat is where the distortion is made.
+        if (model.compressionRatio > 0.0f &&
+            (model.compressionRatio < 2.0f || model.compressionRatio > 12.0f)) {
+            formatIssue(out, Severity::WARNING, "acoustic.leadpipeDiameterMm",
+                        "compression ratio %.1f:1 - outside the 2:1..12:1 range a cone works in",
+                        static_cast<double>(model.compressionRatio));
+        }
+        // A cone steeper than this reflects instead of transforming.
+        if (model.stage1HalfAngleDeg > 30.0f || model.stage2HalfAngleDeg > 30.0f) {
+            formatIssue(out, Severity::WARNING, "acoustic.stage1",
+                        "a cone half angle of %.0f deg is too abrupt: lengthen the stage",
+                        static_cast<double>(model.stage1HalfAngleDeg > model.stage2HalfAngleDeg
+                                                ? model.stage1HalfAngleDeg
+                                                : model.stage2HalfAngleDeg));
+        }
+        // The front cavity is a low pass on everything the bore receives.  A
+        // trumpet needs its harmonics well past 4 kHz to sound like one.
+        if (model.frontChamberCornerHz > 0.0f && model.frontChamberCornerHz < 4000.0f) {
+            formatIssue(out, Severity::WARNING, "acoustic.frontChamberVolumeMl",
+                        "the front chamber starts loading the throat at %.0f Hz: reduce its "
+                        "volume or shorten the cone",
+                        static_cast<double>(model.frontChamberCornerHz));
+        }
+        if (model.highPassSource != AcousticSource::MEASURED) {
+            formatIssue(out, Severity::INFO, "acoustic.measuredHighPassHz",
+                        "the %.0f Hz high pass is %s, not measured - confirm it at the bench",
+                        static_cast<double>(model.highPassHz),
+                        model.highPassSource == AcousticSource::DERIVED
+                            ? "derived from the geometry"
+                            : "the driver's own recommendation");
+        }
+    }
+
+    // ---------------------------------------------------- valve/audio sync
+    if (cfg.valves.sync.enabled && cfg.valves.mode == ValveMode::AUTO) {
+        uint16_t worst = 0;
+        for (uint8_t i = 0; i < cfg.valves.count && i < kMaxValves; ++i) {
+            const uint16_t ms = valveSettleMs(cfg.valves.items[i]);
+            if (ms > worst) worst = ms;
+        }
+        if (worst > cfg.valves.sync.maxDelayMs) {
+            formatIssue(out, Severity::WARNING, "valves.sync.maxDelayMs",
+                        "the slowest piston needs %u ms but the attack delay is capped at %u ms: "
+                        "the note will still start early",
+                        static_cast<unsigned>(worst),
+                        static_cast<unsigned>(cfg.valves.sync.maxDelayMs));
+        }
+        if (worst > 90) {
+            formatIssue(out, Severity::INFO, "valves.sync",
+                        "a %u ms attack delay is audible as sluggishness: a faster servo or a "
+                        "shorter travel is worth more than any DSP setting",
+                        static_cast<unsigned>(worst));
+        }
     }
 
     // --------------------------------------------------------------- valves

@@ -67,7 +67,13 @@ bool applyPreset(PresetId id, InstrumentConfiguration& cfg) {
             setAmplifier(cfg, AmplifierType::MAX98357_INTERNAL);
             setSpeaker(cfg, SpeakerProfileId::VISATON_FRS5_XTS);
             cfg.acoustic.coupling = AcousticCouplingType::SEALED_CHAMBER;
-            cfg.acoustic.chamberVolumeMl = 60.0f;
+            // Small driver, small chambers, and the first cone starts at the
+            // 50 mm cone rather than 60 mm.
+            cfg.acoustic.rearChamberVolumeMl = 60.0f;
+            cfg.acoustic.frontChamberVolumeMl = 20.0f;
+            cfg.acoustic.stage1 = HornStageConfig{50.0f, 24.0f, 45.0f};
+            cfg.acoustic.intermediateDiameterMm = 24.0f;
+            cfg.acoustic.stage2 = HornStageConfig{24.0f, 12.0f, 35.0f};
             break;
 
         case PresetId::STANDARD:
@@ -75,8 +81,18 @@ bool applyPreset(PresetId id, InstrumentConfiguration& cfg) {
             cfg.audio.bitDepth = 24;
             setAmplifier(cfg, AmplifierType::TPA3118D2);
             setSpeaker(cfg, SpeakerProfileId::VISATON_FRS8M);
+            // The reference bench: FRS 8 M, 120 ml sealed rear chamber, a
+            // 35 ml front chamber and the two-stage cone 60 -> 28 -> 12 mm.
+            // These are build dimensions, not measurements: the acoustic model
+            // reports them as derived until the bench says otherwise.
             cfg.acoustic.coupling = AcousticCouplingType::SEALED_CHAMBER;
-            cfg.acoustic.chamberVolumeMl = 120.0f;
+            cfg.acoustic.rearChamberVolumeMl = 120.0f;
+            cfg.acoustic.frontChamberVolumeMl = 35.0f;
+            cfg.acoustic.stage1 = HornStageConfig{60.0f, 28.0f, 58.0f};
+            cfg.acoustic.intermediateDiameterMm = 28.0f;
+            cfg.acoustic.intermediateLengthMm = 20.0f;
+            cfg.acoustic.stage2 = HornStageConfig{28.0f, 12.0f, 40.0f};
+            cfg.acoustic.leadpipeDiameterMm = 11.0f;
             break;
 
         case PresetId::QUALITY:

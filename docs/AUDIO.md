@@ -144,7 +144,7 @@ Worked example, the `LOW_COST`-style mismatch of a small driver behind a big
 amplifier:
 
 ```
-speaker  Visaton FRS 5 XTS, 8 Ω, 5 W allowed
+speaker  Visaton FRS 5 XTS, 8 Ω, 4 W allowed
 amp      TPA3118D2, 25 W
 
 V_amp  = √(25 × 8) = 14.1 V
@@ -208,30 +208,109 @@ what a valve-only instrument uses.
 
 ## Acoustic coupling
 
-| Profile | High pass | Use |
+| Profile | Behaviour | Use |
 |---|---|---|
-| `OPEN` | the speaker's own corner | driver in free air, bench testing |
-| `SEALED_CHAMBER` | configurable, 170 Hz by default | **the reference build** |
-| `CUSTOM_CHAMBER` | configurable | your own geometry |
-
-```
-speaker
-   ↓
-sealed front chamber        ~120 ml
-   ↓
-progressive adapter
-   ↓
-trumpet leadpipe
-   ↓
-trumpet
-```
+| `OPEN` | nothing is modelled, the driver's own corner applies | driver in free air, bench testing |
+| `SEALED_CHAMBER` | the geometry below | **the reference build** |
+| `CUSTOM_CHAMBER` | the same geometry, your dimensions | your own assembly |
 
 The speaker is a **pressure generator feeding the instrument**, not a
-loudspeaker in a box. The sealed chamber raises the effective low-frequency
-corner because the cone works against trapped air, so everything below is
-wasted excursion that only heats the coil — which is why the coupling profile
-contributes to the high pass, and why the chamber has to be genuinely
-airtight.
+loudspeaker in a box:
+
+```
+sealed rear chamber        120 ml
+      |
+   [driver]
+      |
+front chamber              35 ml, 8 mm deep
+      |
+stage 1 cone               Ø60 -> Ø28 over 58 mm
+      |
+intermediate tube          Ø28, 20 mm
+      |
+stage 2 cone               Ø28 -> Ø12 over 40 mm
+      |
+trumpet leadpipe           Ø11
+```
+
+### What the firmware derives from it, and what it does not
+
+`src/audio/AcousticModel.cpp` computes, from that geometry and from the speed
+of sound alone:
+
+| Figure | How |
+|---|---|
+| Compression ratio | cone area / leadpipe area |
+| Cone half angles | `atan((r_in − r_out) / L)` per stage |
+| Front chamber corner | Helmholtz, first order: `(c/2π)·√(A/(V·L_eff))` |
+| Sealed resonance | `fs·√(1 + Vas/Vb)` — **only when fs and Vas are entered** |
+
+Everything is labelled with where it came from — `MEASURED`, `DERIVED` or
+`SPEAKER_PROFILE` — and the UI prints that label next to the number. **These
+are starting points for the bench, not measurements.** Entering a measured
+high pass makes it take over immediately; the model never overrides a
+measurement.
+
+What the firmware deliberately does **not** do is invent Thiele-Small
+parameters. `fs` and `Vas` are properties of the specific driver; they are
+transcribed only where they were actually read off a datasheet (Visaton
+FRS 8 M fs = 125 Hz, Monacor SPX-30M fs = 100 Hz) and are otherwise zero. With
+`Vas` unknown the sealed resonance is reported as *unknown* rather than as a
+plausible-looking guess, and the high pass falls back to the driver's own
+recommendation.
+
+![Coupling geometry](../img/screenshots/settings-acoustic.png)
+
+![Derived figures](../img/screenshots/settings-acoustic-derived.png)
+
+The validator warns when the geometry is outside what a cone can do: a
+compression ratio below 2:1 or above 12:1, a cone half angle past 30° (it
+reflects instead of transforming), or a front-chamber corner below 4 kHz (a
+trumpet needs its harmonics well past that).
+
+> The reference dimensions above trip two of those warnings — 29.8:1
+> compression and a 257 Hz front-chamber corner — which is the model doing its
+> job: a 35 ml volume in front of the cone, feeding a 118 mm path down to
+> 11 mm, behaves as a resonator rather than as a wideband transformer. The
+> numbers are kept as specified rather than quietly adjusted; the bench decides
+> whether to shrink the front chamber, shorten the path, or measure something
+> that disagrees with the model.
+
+### Speaker catalogue
+
+Two distinct manufacturer figures are recorded, because conflating them is how
+a driver gets cooked:
+
+| Driver | Ω | Rated (RMS) | Maximum | Firmware limit |
+|---|---|---|---|---|
+| Visaton FRS 5 XTS | 8 | 5 W | 8 W | 4 W |
+| Dayton Audio CE70PR-4 | 4 | 20 W | 30 W | 8 W |
+| Visaton FRS 8 M | 8 | 30 W | 50 W | 20 W |
+| Monacor SPX-30M | 8 | 20 W | 40 W | 15 W |
+
+`ratedPower` is the continuous rating and is the only one any protection
+decision is made against; `maxPower` is recorded for the validator and never
+used as a licence to drive the coil there. The firmware limit is deliberately
+well below the rated power: the driver plays sustained tones into a sealed
+chamber, which is a far harsher load than the programme material these ratings
+assume.
+
+> The Monacor row used to claim 30 W rated with a 22 W protection limit — both
+> above the manufacturer's 20 W continuous figure, so the limiter was allowing
+> more than the coil is specified to take. The Dayton row named a part that
+> does not exist (`CE70P-4`) and under-rated it at 15 W. Migrating a stored
+> configuration re-applies the catalogue row for any non-`CUSTOM` driver, so an
+> existing instrument is repaired rather than left running the old numbers.
+> `test_catalogue_never_allows_more_than_the_rms_rating` pins the invariant.
+
+## Attack synchronisation
+
+The pistons are part of the resonator, so the sound engine holds a note's
+attack until they have arrived. The arithmetic and the settings live in
+[VALVES.md § Attack synchronisation](VALVES.md#attack-synchronisation); on the
+audio side the only thing that happens is that the articulation — envelope
+restart and phase reset — is deferred by a whole number of blocks, and a note
+released before the pistons arrive is cancelled rather than fired late.
 
 ## Real-time behaviour
 
@@ -239,9 +318,10 @@ The audio task is the highest priority task in the system and its only
 blocking call is the DMA write. Per block it:
 
 1. drains at most 32 MIDI messages from the lock-free queue;
-2. renders `blockSize` samples;
-3. converts float → Q31;
-4. writes to the I²S DMA ring.
+2. advances any pending attack and articulates it when its delay expires;
+3. renders `blockSize` samples;
+4. converts float → Q31;
+5. writes to the I²S DMA ring.
 
 No allocation, no `delay()`, no mutex, no `String`. The two buffers are
 allocated once at boot.
