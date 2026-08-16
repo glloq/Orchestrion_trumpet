@@ -78,23 +78,38 @@ bool I2sBackendBase::installI2s() {
 #endif
 }
 
+// Every failure path goes through end().  installI2s() can fail *after*
+// i2s_new_channel() has handed out the channel handles, and startCodec() can
+// fail with the codec half configured; returning early in either case used to
+// leak the DMA descriptors and the I2S channel until the next reboot.
 bool I2sBackendBase::begin() {
     error_[0] = '\0';
-    if (!preparePeripheral()) return false;
-    if (!installI2s()) return false;
+    if (!preparePeripheral()) {
+        end();
+        return false;
+    }
+    if (!installI2s()) {
+        end();
+        return false;
+    }
 
 #if !defined(OT_HOST_BUILD)
     if (i2s_channel_enable(tx_) != ESP_OK) {
         setError("i2s_channel_enable failed");
+        end();
         return false;
     }
-    if (rx_) i2s_channel_enable(rx_);
+    txEnabled_ = true;
+    if (rx_ && i2s_channel_enable(rx_) == ESP_OK) rxEnabled_ = true;
 #endif
 
     running_ = true;
+    // Set before the call, not after: a codec that fails half way through its
+    // register sequence still has to be shut down.
+    codecStarted_ = true;
     if (!startCodec()) {
         setError("codec initialisation failed");
-        running_ = false;
+        end();
         return false;
     }
     // The instrument always comes up silent: unmuting is the very last step of
@@ -103,22 +118,28 @@ bool I2sBackendBase::begin() {
     return true;
 }
 
+// Idempotent, and independent of `running_`: it is the single teardown path,
+// used by the destructor, by a reconfiguration and by every failed begin().
 void I2sBackendBase::end() {
-    if (!running_) return;
-    mute(true);
-    stopCodec();
+    if (running_) mute(true);
+    if (codecStarted_) {
+        stopCodec();
+        codecStarted_ = false;
+    }
 #if !defined(OT_HOST_BUILD)
     if (tx_) {
-        i2s_channel_disable(tx_);
+        if (txEnabled_) i2s_channel_disable(tx_);
         i2s_del_channel(tx_);
         tx_ = nullptr;
     }
     if (rx_) {
-        i2s_channel_disable(rx_);
+        if (rxEnabled_) i2s_channel_disable(rx_);
         i2s_del_channel(rx_);
         rx_ = nullptr;
     }
 #endif
+    txEnabled_ = false;
+    rxEnabled_ = false;
     running_ = false;
 }
 

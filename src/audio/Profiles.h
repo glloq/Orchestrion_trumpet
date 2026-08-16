@@ -21,6 +21,9 @@ public:
     virtual const char* name() const = 0;
     virtual float impedanceOhm() const = 0;
     virtual float ratedPowerW() const = 0;
+    // Manufacturer short-term maximum.  Recorded so the validator can tell a
+    // typo from a deliberate choice; never used as a drive ceiling.
+    virtual float maximumPowerW() const = 0;
     virtual float minimumFrequencyHz() const = 0;
     virtual float maximumFrequencyHz() const = 0;
     virtual float recommendedHighPassHz() const = 0;
@@ -54,6 +57,7 @@ public:
     const char* name() const override { return name_; }
     float impedanceOhm() const override { return impedance_; }
     float ratedPowerW() const override { return ratedPower_; }
+    float maximumPowerW() const override { return maxPower_; }
     float minimumFrequencyHz() const override { return fMin_; }
     float maximumFrequencyHz() const override { return fMax_; }
     float recommendedHighPassHz() const override { return hpf_; }
@@ -68,6 +72,7 @@ private:
     char name_[kNameLen] = "";
     float impedance_ = 8.0f;
     float ratedPower_ = 10.0f;
+    float maxPower_ = 10.0f;
     float fMin_ = 150.0f;
     float fMax_ = 20000.0f;
     float hpf_ = 180.0f;
@@ -101,8 +106,9 @@ private:
 void applySpeakerProfileDefaults(SpeakerProfileId id, SpeakerConfig& out);
 void applyAmplifierDefaults(AmplifierType type, AmplifierConfig& out);
 
-// Extra high-pass / voicing introduced by the acoustic coupling.
-float acousticHighPassHz(const AcousticConfig& cfg);
+// Extra high-pass / voicing introduced by the acoustic coupling.  The speaker
+// is needed because the sealed rear chamber shifts the driver's own resonance.
+float acousticHighPassHz(const AcousticConfig& cfg, const SpeakerConfig& speaker);
 float acousticGainDb(const AcousticConfig& cfg);
 
 }  // namespace ot

@@ -8,6 +8,7 @@
 #include "valves/FingeringEngine.h"
 #include "valves/ServoMotion.h"
 #include "valves/SolenoidSafety.h"
+#include "valves/ValveTiming.h"
 #include "valves/ValveController.h"
 
 using namespace ot;
@@ -292,7 +293,8 @@ void test_solenoid_duty_cycle_limit(void) {
     SolenoidSafety safety;
     safety.configure(cfg);
 
-    // Held continuously: the measured duty climbs to 100% and trips the limit.
+    // Held continuously at 40% against a 30% ceiling: the thermal load really
+    // is above what the coil was allowed, so this must still trip.
     safety.request(true, 0);
     uint32_t t = 0;
     for (; t <= 20000; t += 50) {
@@ -301,6 +303,130 @@ void test_solenoid_duty_cycle_limit(void) {
     }
     TEST_ASSERT_EQUAL(SolenoidFault::OVER_DUTY, safety.fault());
     TEST_ASSERT_EQUAL_UINT8(0, safety.dutyPercent());
+}
+
+// The hold level exists precisely so a long note does not have to trip the
+// duty ceiling.  Counting a coil held at 35% as 100% duty made every note
+// longer than two seconds fail with OVER_DUTY.
+void test_solenoid_hold_level_is_not_counted_as_full_duty(void) {
+    ValveConfig cfg;            // the shipped defaults
+    cfg.pullInPwm = 100;
+    cfg.pullInMs = 50;
+    cfg.holdPwm = 35;
+    cfg.maxDutyPercent = 60;
+    cfg.maxOnMs = 0;            // isolate the duty guard from the time guard
+
+    SolenoidSafety safety;
+    safety.configure(cfg);
+    safety.request(true, 0);
+    for (uint32_t t = 0; t <= 30000; t += 20) {
+        safety.update(t);
+        TEST_ASSERT_EQUAL_MESSAGE(SolenoidFault::NONE, safety.fault(),
+                                  "a note held at the hold level must not trip the duty guard");
+    }
+    TEST_ASSERT_EQUAL_UINT8(35, safety.dutyPercent());
+    // Equivalent continuous duty settles at the hold level, not at 100%.
+    TEST_ASSERT_UINT8_WITHIN(4, 35, safety.measuredDutyPercent());
+}
+
+// The measured figure is a *thermal* duty: 50% PWM heats a coil like 50% of
+// the drive, not like being on all the time.
+void test_solenoid_measured_duty_follows_the_pwm_level(void) {
+    ValveConfig cfg;
+    cfg.pullInPwm = 50;
+    cfg.pullInMs = 60000;       // stay at the pull-in level for the whole test
+    cfg.holdPwm = 50;
+    cfg.maxDutyPercent = 0;     // guard off
+    cfg.maxOnMs = 0;
+
+    SolenoidSafety safety;
+    safety.configure(cfg);
+    safety.request(true, 0);
+    for (uint32_t t = 0; t <= 20000; t += 20) safety.update(t);
+    TEST_ASSERT_UINT8_WITHIN(3, 50, safety.measuredDutyPercent());
+}
+
+// The observation window slides every few seconds.  It used to take the
+// continuous-ON timestamp with it, so a solenoid configured at the sanitiser's
+// own upper bound of 20 s never reached its limit at all.
+void test_solenoid_max_on_time_survives_the_window_sliding(void) {
+    ValveConfig cfg;
+    cfg.pullInPwm = 100;
+    cfg.pullInMs = 50;
+    cfg.holdPwm = 35;
+    cfg.maxOnMs = 20000;        // the largest value the validator will store
+    cfg.maxDutyPercent = 0;     // isolate the time guard
+    cfg.cooldownMs = 1000;
+
+    SolenoidSafety safety;
+    safety.configure(cfg);
+    safety.request(true, 0);
+
+    uint32_t trippedAt = 0;
+    for (uint32_t t = 0; t <= 40000; t += 20) {
+        safety.update(t);
+        if (safety.fault() == SolenoidFault::OVER_TIME) {
+            trippedAt = t;
+            break;
+        }
+    }
+    TEST_ASSERT_EQUAL_MESSAGE(SolenoidFault::OVER_TIME, safety.fault(),
+                              "a coil held past maxOnMs must always be released");
+    TEST_ASSERT_UINT32_WITHIN(100, 20000, trippedAt);
+    TEST_ASSERT_EQUAL_UINT8(0, safety.dutyPercent());
+}
+
+// The same, one step further out: the guard must not care how many times the
+// window rolled over.
+void test_solenoid_max_on_time_beyond_the_window(void) {
+    ValveConfig cfg;
+    cfg.pullInPwm = 100;
+    cfg.pullInMs = 50;
+    cfg.holdPwm = 35;
+    cfg.maxOnMs = 45000;
+    cfg.maxDutyPercent = 0;
+
+    SolenoidSafety safety;
+    safety.configure(cfg);
+    safety.request(true, 0);
+    uint32_t trippedAt = 0;
+    for (uint32_t t = 0; t <= 90000; t += 20) {
+        safety.update(t);
+        if (safety.fault() == SolenoidFault::OVER_TIME) {
+            trippedAt = t;
+            break;
+        }
+    }
+    TEST_ASSERT_EQUAL(SolenoidFault::OVER_TIME, safety.fault());
+    TEST_ASSERT_UINT32_WITHIN(100, 45000, trippedAt);
+}
+
+// Pull-in raises the level; it is not a second press and must not restart the
+// continuous clock either.
+void test_solenoid_pull_in_to_hold_does_not_restart_the_clock(void) {
+    ValveConfig cfg;
+    cfg.pullInPwm = 100;
+    cfg.pullInMs = 50;
+    cfg.holdPwm = 35;
+    cfg.maxOnMs = 2000;
+    cfg.maxDutyPercent = 0;
+
+    SolenoidSafety safety;
+    safety.configure(cfg);
+    safety.request(true, 0);
+    safety.update(100);
+    TEST_ASSERT_EQUAL_UINT8(35, safety.dutyPercent());      // already holding
+    TEST_ASSERT_UINT32_WITHIN(5, 100, safety.continuousOnMs(100));
+
+    uint32_t trippedAt = 0;
+    for (uint32_t t = 100; t <= 6000; t += 20) {
+        safety.update(t);
+        if (safety.fault() == SolenoidFault::OVER_TIME) {
+            trippedAt = t;
+            break;
+        }
+    }
+    TEST_ASSERT_UINT32_WITHIN(60, 2000, trippedAt);
 }
 
 void test_solenoid_release_clears_the_drive_immediately(void) {
@@ -483,6 +609,85 @@ void test_mock_actuator_contract(void) {
     TEST_ASSERT_TRUE(actuator.isPressed(0));
 }
 
+// ---------------------------------------------------------------------------
+// Valve -> audio synchronisation timing
+// ---------------------------------------------------------------------------
+void test_settle_time_follows_the_servo_travel(void) {
+    ValveConfig v;
+    v.type = ValveActuatorType::SERVO;
+    v.releasedAngle = 40;
+    v.pressedAngle = 88;
+    v.speedDegPerSec = 900;
+    // 48 deg at 900 deg/s is 53 ms, plus the mechanical margin.
+    TEST_ASSERT_UINT16_WITHIN(4, 65, valveSettleMs(v));
+
+    v.speedDegPerSec = 300;     // a slow hobby servo
+    TEST_ASSERT_UINT16_WITHIN(4, 172, valveSettleMs(v));
+
+    v.measuredSettleMs = 41;    // a bench figure always wins
+    TEST_ASSERT_EQUAL_UINT16(41, valveSettleMs(v));
+}
+
+void test_settle_time_of_a_solenoid_is_its_pull_in(void) {
+    ValveConfig v;
+    v.type = ValveActuatorType::SOLENOID;
+    v.pullInMs = 50;
+    TEST_ASSERT_UINT16_WITHIN(4, 62, valveSettleMs(v));
+
+    v.type = ValveActuatorType::OFF;
+    TEST_ASSERT_EQUAL_UINT16(0, valveSettleMs(v));
+}
+
+void test_attack_delay_waits_for_the_slowest_moving_valve(void) {
+    ValvesConfig valves;
+    valves.count = 3;
+    valves.mode = ValveMode::AUTO;
+    for (uint8_t i = 0; i < 3; ++i) {
+        valves.items[i].type = ValveActuatorType::SERVO;
+        valves.items[i].releasedAngle = 40;
+        valves.items[i].pressedAngle = 88;
+        valves.items[i].speedDegPerSec = 900;
+    }
+    valves.items[2].speedDegPerSec = 200;   // valve 3 is the slow one
+
+    // Only valve 1 moves: the fast time applies.
+    TEST_ASSERT_UINT16_WITHIN(5, 65, noteAttackDelayMs(valves, 0b000, 0b001));
+    // Valve 3 moves as well: the note waits for it, and for it alone - the
+    // valves move together, so the delays do not add up.
+    TEST_ASSERT_UINT16_WITHIN(6, 120, noteAttackDelayMs(valves, 0b000, 0b101));
+    // Same fingering: nothing has to move, so nothing waits.
+    TEST_ASSERT_EQUAL_UINT16(0, noteAttackDelayMs(valves, 0b101, 0b101));
+}
+
+void test_attack_delay_respects_the_policy(void) {
+    ValvesConfig valves;
+    valves.count = 3;
+    valves.mode = ValveMode::AUTO;
+    for (uint8_t i = 0; i < 3; ++i) {
+        valves.items[i].type = ValveActuatorType::SERVO;
+        valves.items[i].speedDegPerSec = 200;    // ~252 ms of travel
+    }
+
+    // The ceiling is a hard one: a badly configured servo cannot make every
+    // note arrive a quarter of a second late.
+    valves.sync.maxDelayMs = 80;
+    TEST_ASSERT_EQUAL_UINT16(80, noteAttackDelayMs(valves, 0, 0b001));
+
+    valves.sync.maxDelayMs = 500;
+    valves.sync.trimMs = -40;
+    const uint16_t trimmed = noteAttackDelayMs(valves, 0, 0b001);
+    valves.sync.trimMs = 0;
+    TEST_ASSERT_EQUAL_UINT16(trimmed + 40, noteAttackDelayMs(valves, 0, 0b001));
+
+    valves.sync.enabled = false;
+    TEST_ASSERT_EQUAL_UINT16(0, noteAttackDelayMs(valves, 0, 0b001));
+
+    // Nothing is following the notes in MANUAL, so there is nothing to sync to.
+    valves.sync.enabled = true;
+    valves.mode = ValveMode::MANUAL;
+    TEST_ASSERT_EQUAL_UINT16(0, noteAttackDelayMs(valves, 0, 0b001));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_fingering_standard_chart);
@@ -501,6 +706,11 @@ int main(int, char**) {
     RUN_TEST(test_solenoid_cooldown_then_recovery);
     RUN_TEST(test_solenoid_duty_cycle_limit);
     RUN_TEST(test_solenoid_release_clears_the_drive_immediately);
+    RUN_TEST(test_solenoid_hold_level_is_not_counted_as_full_duty);
+    RUN_TEST(test_solenoid_measured_duty_follows_the_pwm_level);
+    RUN_TEST(test_solenoid_max_on_time_survives_the_window_sliding);
+    RUN_TEST(test_solenoid_max_on_time_beyond_the_window);
+    RUN_TEST(test_solenoid_pull_in_to_hold_does_not_restart_the_clock);
     RUN_TEST(test_controller_mixed_servo_and_solenoid);
     RUN_TEST(test_controller_all_notes_off_releases_every_valve);
     RUN_TEST(test_controller_panic_parks_everything);
@@ -508,5 +718,9 @@ int main(int, char**) {
     RUN_TEST(test_test_pulse_restores_the_played_state);
     RUN_TEST(test_controller_ignores_valves_it_does_not_have);
     RUN_TEST(test_mock_actuator_contract);
+    RUN_TEST(test_settle_time_follows_the_servo_travel);
+    RUN_TEST(test_settle_time_of_a_solenoid_is_its_pull_in);
+    RUN_TEST(test_attack_delay_waits_for_the_slowest_moving_valve);
+    RUN_TEST(test_attack_delay_respects_the_policy);
     return UNITY_END();
 }

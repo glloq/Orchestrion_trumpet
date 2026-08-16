@@ -399,6 +399,9 @@ const Settings = (() => {
             set('speaker.name', preset.name);
             set('speaker.impedance', preset.impedance);
             set('speaker.powerRms', preset.powerRms);
+            set('speaker.powerMax', preset.powerMax);
+            set('speaker.fsHz', preset.fsHz || 0);
+            set('speaker.minFrequency', preset.minFrequency);
             set('speaker.recommendedHighPass', preset.recommendedHighPass);
             set('speaker.powerLimit', preset.powerLimit);
           }
@@ -464,6 +467,8 @@ const Settings = (() => {
       return wrap;
     }));
 
+    body.appendChild(UI.disclosure('Chamber, cone and leadpipe', () => acousticEditor()));
+
     body.appendChild(UI.disclosure('I²S / I²C pins and DMA', () => UI.el('div', { class: 'form-grid' }, [
       UI.field('I²S BCLK', UI.number(a.i2s.bclk, (v) => set('audio.i2s.bclk', v), { min: -1, max: 48 })),
       UI.field('I²S WS / LRCK', UI.number(a.i2s.ws, (v) => set('audio.i2s.ws', v), { min: -1, max: 48 })),
@@ -491,6 +496,90 @@ const Settings = (() => {
     ])));
   }
 
+  // The coupling geometry, and what the firmware derives from it.  Every
+  // derived figure is labelled with where it came from: an estimate must never
+  // be mistaken for a measurement.
+  function acousticEditor() {
+    const a = cfg().acoustic;
+    const wrap = UI.el('div');
+
+    if (a.coupling === 'OPEN') {
+      wrap.appendChild(UI.el('p', { class: 'help',
+        text: 'Open air: nothing loads the driver, so there is no geometry to describe.' }));
+      return wrap;
+    }
+
+    const stage = (key, label) => UI.el('div', {}, [
+      UI.el('div', { class: 'section-title', text: label }),
+      UI.el('div', { class: 'form-grid' }, [
+        UI.field('Inlet Ø (mm)', UI.number(a[key].inletDiameterMm,
+          (v) => set('acoustic.' + key + '.inletDiameterMm', v), { min: 1, max: 200, step: 0.5 })),
+        UI.field('Outlet Ø (mm)', UI.number(a[key].outletDiameterMm,
+          (v) => set('acoustic.' + key + '.outletDiameterMm', v), { min: 1, max: 200, step: 0.5 })),
+        UI.field('Length (mm)', UI.number(a[key].lengthMm,
+          (v) => set('acoustic.' + key + '.lengthMm', v), { min: 1, max: 400, step: 0.5 }))
+      ])
+    ]);
+
+    wrap.appendChild(UI.el('div', { class: 'section-title', text: 'Chambers' }));
+    wrap.appendChild(UI.el('div', { class: 'form-grid' }, [
+      UI.field('Rear chamber (ml)', UI.number(a.rearChamberVolumeMl,
+        (v) => set('acoustic.rearChamberVolumeMl', v), { min: 0, max: 2000 }),
+        'Sealed volume behind the cone.'),
+      UI.field('Front chamber (ml)', UI.number(a.frontChamberVolumeMl,
+        (v) => set('acoustic.frontChamberVolumeMl', v), { min: 0, max: 500 }),
+        'Trapped volume in front of the cone, before the first stage.'),
+      UI.field('Front chamber depth (mm)', UI.number(a.frontChamberDepthMm,
+        (v) => set('acoustic.frontChamberDepthMm', v), { min: 0, max: 100, step: 0.5 }))
+    ]));
+
+    wrap.appendChild(stage('stage1', 'Stage 1 — driver to intermediate tube'));
+    wrap.appendChild(UI.el('div', { class: 'section-title', text: 'Intermediate tube' }));
+    wrap.appendChild(UI.el('div', { class: 'form-grid' }, [
+      UI.field('Diameter (mm)', UI.number(a.intermediateDiameterMm,
+        (v) => set('acoustic.intermediateDiameterMm', v), { min: 1, max: 120, step: 0.5 })),
+      UI.field('Length (mm)', UI.number(a.intermediateLengthMm,
+        (v) => set('acoustic.intermediateLengthMm', v), { min: 0, max: 300, step: 0.5 }))
+    ]));
+    wrap.appendChild(stage('stage2', 'Stage 2 — intermediate tube to leadpipe'));
+
+    wrap.appendChild(UI.el('div', { class: 'section-title', text: 'Leadpipe and bench figures' }));
+    wrap.appendChild(UI.el('div', { class: 'form-grid' }, [
+      UI.field('Leadpipe Ø (mm)', UI.number(a.leadpipeDiameterMm,
+        (v) => set('acoustic.leadpipeDiameterMm', v), { min: 1, max: 60, step: 0.5 })),
+      UI.field('Measured high pass (Hz)', UI.number(a.measuredHighPassHz,
+        (v) => set('acoustic.measuredHighPassHz', v), { min: 0, max: 2000 }),
+        '0 = derive it from the geometry. A bench measurement always wins.'),
+      UI.field('Coupling gain (dB)', UI.number(a.eqGainDb,
+        (v) => set('acoustic.eqGainDb', v), { min: -12, max: 12, step: 0.5 }))
+    ]));
+
+    // ---- what the model makes of it ----
+    const model = MOCK.acousticModel(cfg());
+    if (model) {
+      const SOURCE = { MEASURED: 'measured at the bench', DERIVED: 'derived from the geometry',
+                       SPEAKER_PROFILE: "the driver's own recommendation" };
+      wrap.appendChild(UI.el('div', { class: 'section-title', text: 'Derived — not measured' }));
+      wrap.appendChild(UI.kv([
+        ['Compression ratio', model.compressionRatio.toFixed(1) + ' : 1'],
+        ['Cone half angles', model.stage1HalfAngleDeg.toFixed(0) + '° / '
+                             + model.stage2HalfAngleDeg.toFixed(0) + '°'],
+        ['Path length', Math.round(model.totalPathLengthMm) + ' mm'],
+        ['Front chamber corner', Math.round(model.frontChamberCornerHz) + ' Hz'],
+        ['Sealed resonance', model.sealedResonanceKnown
+            ? Math.round(model.sealedResonanceHz) + ' Hz'
+            : 'unknown — enter the driver fs and Vas'],
+        ['High pass in force', Math.round(model.highPassHz) + ' Hz · '
+                               + (SOURCE[model.highPassSource] || model.highPassSource)]
+      ]));
+      wrap.appendChild(UI.el('p', { class: 'help',
+        text: 'These follow from the dimensions above and from the speed of sound. They are '
+            + 'starting points for the bench, not measurements: enter the measured high pass '
+            + 'once you have swept the assembly and it takes over.' }));
+    }
+    return wrap;
+  }
+
   // =========================================================================
   // Pistons
   // =========================================================================
@@ -516,6 +605,33 @@ const Settings = (() => {
 
     for (let i = 0; i < v.count; i++) body.appendChild(valveEditor(v.items[i], i));
 
+    body.appendChild(UI.el('div', { class: 'section-title', text: 'Attack synchronisation' }));
+    body.appendChild(UI.el('p', { class: 'help', style: 'margin-top:0',
+      text: 'The pistons change the resonator, so a note that starts before they arrive is '
+          + 'played through the wrong bore. The attack waits for the valves that actually have '
+          + 'to move — and only for those.' }));
+    const worst = Math.max(0, ...v.items.slice(0, v.count).map(settleEstimateMs));
+    body.appendChild(UI.el('div', { class: 'form-grid' }, [
+      UI.el('div', { class: 'field' }, [
+        UI.el('label', { text: 'Synchronisation' }),
+        UI.toggle('Wait for the pistons', v.sync.enabled,
+                  (x) => { set('valves.sync.enabled', x); render(); }),
+        UI.toggle('Only when the fingering changes', v.sync.onlyWhenFingeringChanges,
+                  (x) => set('valves.sync.onlyWhenFingeringChanges', x))
+      ]),
+      UI.field('Trim (ms)', UI.number(v.sync.trimMs,
+        (x) => set('valves.sync.trimMs', x), { min: -100, max: 200 }),
+        'Added to the computed delay. Negative starts the note earlier.'),
+      UI.field('Ceiling (ms)', UI.number(v.sync.maxDelayMs,
+        (x) => set('valves.sync.maxDelayMs', x), { min: 0, max: 400 }),
+        'Nothing is ever delayed by more than this.')
+    ]));
+    body.appendChild(UI.el('div', { class: 'help',
+      text: 'Slowest piston as configured: about ' + worst + ' ms'
+          + (worst > v.sync.maxDelayMs
+              ? ' — above the ceiling, so the note will still start early.'
+              : '.') }));
+
     body.appendChild(UI.disclosure('Servo and solenoid timing', () => UI.el('div', { class: 'form-grid' }, [
       UI.field('Servo PWM (Hz)', UI.number(v.servoFrequencyHz,
         (x) => set('valves.servoFrequencyHz', x), { min: 50, max: 333 })),
@@ -530,6 +646,18 @@ const Settings = (() => {
     ])));
   }
 
+  // Mirrors valveSettleMs() in src/valves/ValveTiming.cpp.
+  function settleEstimateMs(item) {
+    if (item.measuredSettleMs > 0) return item.measuredSettleMs;
+    if (item.type === 'SERVO') {
+      if (!item.speed) return 400;
+      return Math.min(400, Math.round(Math.abs(item.pressedAngle - item.releasedAngle)
+                                      * 1000 / item.speed) + 12);
+    }
+    if (item.type === 'SOLENOID') return Math.min(400, item.pullInMs + 12);
+    return 0;
+  }
+
   function valveEditor(item, index) {
     const path = 'valves.items.' + index + '.';
     const fields = [
@@ -537,7 +665,12 @@ const Settings = (() => {
         { value: 'SERVO', label: 'Servo' },
         { value: 'SOLENOID', label: 'Solenoid' },
         { value: 'DISABLED', label: 'Not fitted' }
-      ], item.type, (v) => { set(path + 'type', v); render(); }))
+      ], item.type, (v) => { set(path + 'type', v); render(); })),
+      item.type === 'DISABLED' ? null : UI.field('Measured settle (ms)',
+        UI.number(item.measuredSettleMs, (v) => { set(path + 'measuredSettleMs', v); render(); },
+                  { min: 0, max: 400 }),
+        '0 = estimate it (' + settleEstimateMs(item) + ' ms). Time the piston at the bench and '
+        + 'enter it here: the estimate ignores load and linkage slop.')
     ];
 
     if (item.type === 'SERVO') {
@@ -676,6 +809,7 @@ const Settings = (() => {
           ['Dropped by filters', d.router.droppedByFilter],
           ['MIDI loops suppressed', d.router.loopsSuppressed],
           ['RTP datagrams refused', d.router.rtpRejectedSources || 0],
+          ['Last attack delay', (d.attackDelayMs || 0) + ' ms  (waiting for the pistons)'],
           ['OTA', d.otaAvailable ? 'available' : 'not available on this partition table']
         ]));
         host.appendChild(UI.el('div', { class: 'section-title', text: 'Valves' }));

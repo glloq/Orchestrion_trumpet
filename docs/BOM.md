@@ -28,13 +28,13 @@ Prices are rough 2025 hobby-quantity figures in euros, for orientation only.
 ### LOW COST — ★★★
 
 ```
-ESP32 → MAX98357A → Dayton CE70P-4
+ESP32 → MAX98357A → Dayton CE70PR-4
 ```
 
 | Item | Qty | ≈ € |
 |---|---|---|
 | MAX98357A breakout | 1 | 4 |
-| Dayton Audio CE70P-4 (4 Ω, 15 W) | 1 | 12 |
+| Dayton Audio CE70PR-4 (4 Ω, 20 W RMS) | 1 | 12 |
 | **Audio subtotal** | | **16** |
 
 16 bit, one board, no separate amplifier. The cheapest chain that genuinely
@@ -49,7 +49,7 @@ ESP32 → MAX98357A → Visaton FRS 5 XTS
 | Item | Qty | ≈ € |
 |---|---|---|
 | MAX98357A breakout | 1 | 4 |
-| Visaton FRS 5 XTS (8 Ω, 8 W) | 1 | 14 |
+| Visaton FRS 5 XTS (8 Ω, 5 W RMS) | 1 | 14 |
 | **Audio subtotal** | | **18** |
 
 Smallest chamber (~60 ml). Quiet rooms.
@@ -64,7 +64,7 @@ ESP32 → PCM5102A → TPA3118D2 → Visaton FRS 8 M → sealed chamber → trum
 |---|---|---|
 | PCM5102A breakout | 1 | 5 |
 | TPA3118D2 amplifier board (mono or bridged) | 1 | 8 |
-| Visaton FRS 8 M (8 Ω, 30 W) | 1 | 22 |
+| Visaton FRS 8 M (8 Ω, 30 W RMS) | 1 | 22 |
 | **Audio subtotal** | | **35** |
 
 The reference chain, used for all audio development. 24 bit into a clean
@@ -81,10 +81,11 @@ ESP32 → PCM5102A → TPA3118D2 → Monacor SPX-30M
 |---|---|---|
 | PCM5102A breakout | 1 | 5 |
 | TPA3118D2 amplifier board | 1 | 8 |
-| Monacor SPX-30M (8 Ω, 30 W) | 1 | 38 |
+| Monacor SPX-30M (8 Ω, 20 W RMS) | 1 | 38 |
 | **Audio subtotal** | | **51** |
 
-Lower usable corner (110 Hz) and a smoother response than the FRS 8 M.
+Lower usable corner (fs 100 Hz) and a smoother response than the FRS 8 M, at half
+the continuous power: 20 W RMS against 30 W, so the firmware allows 15 W.
 
 ### FEEDBACK — ★★★★½
 
@@ -189,10 +190,10 @@ BLE MIDI, RTP-MIDI and the web keyboard need no extra hardware at all.
 | TPA3118D2 | 24 V supply, 25 W into 8 Ω |
 | TAS5760M | 24 V supply, ~20 W into 8 Ω |
 | PCM5102A | 3.3 V, line level output |
-| Visaton FRS 5 XTS | 8 Ω, 8 W RMS — the firmware limits it to 5 W |
-| Dayton CE70P-4 | 4 Ω, 15 W RMS — limited to 8 W |
+| Visaton FRS 5 XTS | 8 Ω, 5 W RMS (8 W max) — the firmware limits it to 4 W |
+| Dayton CE70PR-4 | 4 Ω, 20 W RMS (30 W max) — limited to 8 W |
 | Visaton FRS 8 M | 8 Ω, 30 W RMS — limited to 20 W |
-| Monacor SPX-30M | 8 Ω, 30 W RMS — limited to 22 W |
+| Monacor SPX-30M | 8 Ω, 20 W RMS (40 W max) — limited to 15 W |
 | ESP32 GPIO | 3.3 V, 12 mA — **never drive a motor directly** |
 | Servo rail | 5 V, size for 1 A per servo stalled |
 | Solenoid rail | 12 V or 24 V, 1–2 A per coil at pull-in |

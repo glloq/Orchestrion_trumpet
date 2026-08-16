@@ -143,7 +143,8 @@ const MOCK = (() => {
       invert: false, detachAfterMove: true, detachDelayMs: 220,
       minPulseUs: 500, maxPulseUs: 2400,
       activeHigh: true, pullInPwm: 100, pullInMs: 50, holdPwm: 35,
-      maxOnMs: 5000, cooldownMs: 3000, maxDutyPercent: 60, cc: 20
+      maxOnMs: 5000, cooldownMs: 3000, maxDutyPercent: 60, cc: 20,
+      measuredSettleMs: 0
     });
     const items = [valve(15), valve(16), valve(4), valve(2)];
     items[2] = Object.assign(valve(4), { type: 'SOLENOID' });
@@ -161,7 +162,7 @@ const MOCK = (() => {
     });
 
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       board: { type: 'ESP32_S3' },
       system: { deviceName: 'Orchestrion Trumpet', preset: 'STANDARD',
                 wizardCompleted: true, safeModeForced: false },
@@ -188,14 +189,21 @@ const MOCK = (() => {
       },
       amplifier: { type: 'TPA3118D2', maxPower: 25, gainDb: 26, speakerImpedance: 8, volumeLimit: 1 },
       speaker: { profile: 'VISATON_FRS8M', name: 'Visaton FRS 8 M', impedance: 8, powerRms: 30,
-                 minFrequency: 120, maxFrequency: 20000, recommendedHighPass: 160,
+                 powerMax: 50, fsHz: 125, vasLitres: 0,
+                 minFrequency: 100, maxFrequency: 20000, recommendedHighPass: 160,
                  gainCorrectionDb: 0, powerLimit: 20 },
-      acoustic: { coupling: 'SEALED_CHAMBER', chamberVolumeMl: 120, outletDiameterMm: 11,
-                  outletLengthMm: 45, highPassHz: 170, eqGainDb: 2 },
+      acoustic: { coupling: 'SEALED_CHAMBER', rearChamberVolumeMl: 120,
+                  frontChamberVolumeMl: 35, frontChamberDepthMm: 8,
+                  stage1: { inletDiameterMm: 60, outletDiameterMm: 28, lengthMm: 58 },
+                  intermediateDiameterMm: 28, intermediateLengthMm: 20,
+                  stage2: { inletDiameterMm: 28, outletDiameterMm: 12, lengthMm: 40 },
+                  leadpipeDiameterMm: 11, measuredHighPassHz: 0, eqGainDb: 2 },
       valves: { count: 3, mode: 'AUTO', items,
                 pca9685I2c: { sda: 8, scl: 9, frequency: 400000 },
                 pca9685Address: 64, pca9685OePin: -1,
-                servoFrequencyHz: 50, solenoidPwmFrequencyHz: 20000 },
+                servoFrequencyHz: 50, solenoidPwmFrequencyHz: 20000,
+                sync: { enabled: true, onlyWhenFingeringChanges: true,
+                        trimMs: 0, maxDelayMs: 120 } },
       instrument: { type: 'BB_TRUMPET', pitchMode: 'CONCERT', customTranspose: 0,
                     notePriority: 'LAST', legato: true, retrigger: false, portamentoMs: 0,
                     noteMin: 52, noteMax: 86 },
@@ -292,16 +300,16 @@ const MOCK = (() => {
       { key: 'CUSTOM', maxPower: 25, gainDb: 26, impedance: 8 }
     ],
     speakers: [
-      { key: 'VISATON_FRS5_XTS', name: 'Visaton FRS 5 XTS', impedance: 8, powerRms: 8,
-        minFrequency: 150, recommendedHighPass: 200, powerLimit: 5 },
-      { key: 'DAYTON_CE70PR4', name: 'Dayton CE70P-4', impedance: 4, powerRms: 15,
-        minFrequency: 130, recommendedHighPass: 170, powerLimit: 8 },
+      { key: 'VISATON_FRS5_XTS', name: 'Visaton FRS 5 XTS', impedance: 8, powerRms: 5,
+        powerMax: 8, minFrequency: 120, recommendedHighPass: 200, powerLimit: 4, fsHz: 0 },
+      { key: 'DAYTON_CE70PR4', name: 'Dayton CE70PR-4', impedance: 4, powerRms: 20,
+        powerMax: 30, minFrequency: 85, recommendedHighPass: 170, powerLimit: 8, fsHz: 0 },
       { key: 'VISATON_FRS8M', name: 'Visaton FRS 8 M', impedance: 8, powerRms: 30,
-        minFrequency: 120, recommendedHighPass: 160, powerLimit: 20 },
-      { key: 'MONACOR_SPX30M', name: 'Monacor SPX-30M', impedance: 8, powerRms: 30,
-        minFrequency: 110, recommendedHighPass: 150, powerLimit: 22 },
+        powerMax: 50, minFrequency: 100, recommendedHighPass: 160, powerLimit: 20, fsHz: 125 },
+      { key: 'MONACOR_SPX30M', name: 'Monacor SPX-30M', impedance: 8, powerRms: 20,
+        powerMax: 40, minFrequency: 100, recommendedHighPass: 150, powerLimit: 15, fsHz: 100 },
       { key: 'CUSTOM', name: 'Custom speaker', impedance: 8, powerRms: 10,
-        minFrequency: 150, recommendedHighPass: 200, powerLimit: 6 }
+        powerMax: 10, minFrequency: 150, recommendedHighPass: 200, powerLimit: 6, fsHz: 0 }
     ],
     presets: [
       { key: 'LOW_COST', title: 'Low cost', summary: 'ESP32 → MAX98357A → Dayton CE70P-4.',
@@ -387,13 +395,88 @@ const MOCK = (() => {
                     message: 'the amplifier can deliver ' + cfg.amplifier.maxPower + ' W into a '
                            + cfg.speaker.powerRms + ' W speaker: the limiter will cap it' });
     }
+    if (cfg.speaker.powerMax > 0 && cfg.speaker.powerRms > cfg.speaker.powerMax) {
+      issues.push({ severity: 'ERROR', field: 'speaker.powerRms',
+                    message: 'the continuous rating is above the maximum rating' });
+    }
     const scale = peakScale(cfg);
     if (scale < 0.9) {
       issues.push({ severity: 'INFO', field: 'speaker.powerLimit',
                     message: 'the protection stage will keep the output below '
                            + Math.round(scale * 100) + '% of full scale' });
     }
+
+    // Acoustics: same rules as ConfigValidator, computed from the geometry.
+    const m = acousticModel(cfg);
+    if (m) {
+      if (m.compressionRatio < 2 || m.compressionRatio > 12) {
+        issues.push({ severity: 'WARNING', field: 'acoustic.leadpipeDiameterMm',
+                      message: 'compression ratio ' + m.compressionRatio.toFixed(1)
+                             + ':1 — outside the 2:1..12:1 range a cone works in' });
+      }
+      if (m.frontChamberCornerHz > 0 && m.frontChamberCornerHz < 4000) {
+        issues.push({ severity: 'WARNING', field: 'acoustic.frontChamberVolumeMl',
+                      message: 'the front chamber starts loading the throat at '
+                             + Math.round(m.frontChamberCornerHz) + ' Hz' });
+      }
+      if (m.highPassSource !== 'MEASURED') {
+        issues.push({ severity: 'INFO', field: 'acoustic.measuredHighPassHz',
+                      message: 'the ' + Math.round(m.highPassHz) + ' Hz high pass is '
+                             + (m.highPassSource === 'DERIVED' ? 'derived from the geometry'
+                                                              : "the driver's own recommendation")
+                             + ', not measured — confirm it at the bench' });
+      }
+    }
     return issues;
+  }
+
+  // Mirrors src/audio/AcousticModel.cpp so the offline UI shows the same
+  // numbers the firmware computes. Geometry only — nothing is invented here
+  // either: with no fs/Vas the sealed resonance stays unknown.
+  function acousticModel(cfg) {
+    const a = cfg.acoustic;
+    if (!a || a.coupling === 'OPEN' || a.coupling === 'OPEN_AIR') return null;
+    const area = (d) => (d > 0 ? Math.PI * (d / 2) * (d / 2) : 0);
+    const c = 343;
+
+    const coneArea = area(a.stage1.inletDiameterMm);
+    const throatArea = area(a.leadpipeDiameterMm);
+    const path = a.stage1.lengthMm + a.intermediateLengthMm + a.stage2.lengthMm;
+    const halfAngle = (st) => st.lengthMm > 0
+      ? Math.atan(((st.inletDiameterMm - st.outletDiameterMm) / 2) / st.lengthMm) * 180 / Math.PI
+      : 90;
+
+    const volumeM3 = a.frontChamberVolumeMl * 1e-6;
+    const areaM2 = throatArea * 1e-6;
+    const lengthM = (path + 0.85 * a.leadpipeDiameterMm / 2) * 1e-3;
+    const frontChamberCornerHz = (volumeM3 > 0 && areaM2 > 0 && lengthM > 0)
+      ? (c / (2 * Math.PI)) * Math.sqrt(areaM2 / (volumeM3 * lengthM)) : 0;
+
+    const vb = a.rearChamberVolumeMl / 1000;
+    const known = cfg.speaker.fsHz > 0 && cfg.speaker.vasLitres > 0 && vb > 0;
+    const sealedResonanceHz = known
+      ? cfg.speaker.fsHz * Math.sqrt(1 + cfg.speaker.vasLitres / vb) : 0;
+
+    let highPassHz, highPassSource;
+    if (a.measuredHighPassHz > 0) {
+      highPassHz = a.measuredHighPassHz;
+      highPassSource = 'MEASURED';
+    } else if (known) {
+      highPassHz = sealedResonanceHz;
+      highPassSource = 'DERIVED';
+    } else {
+      highPassHz = cfg.speaker.recommendedHighPass;
+      highPassSource = 'SPEAKER_PROFILE';
+    }
+
+    return {
+      coneAreaMm2: coneArea, throatAreaMm2: throatArea,
+      compressionRatio: throatArea > 0 ? coneArea / throatArea : 0,
+      stage1HalfAngleDeg: halfAngle(a.stage1), stage2HalfAngleDeg: halfAngle(a.stage2),
+      totalPathLengthMm: path, frontChamberCornerHz,
+      sealedResonanceHz, sealedResonanceKnown: known,
+      highPassHz, highPassSource
+    };
   }
 
   function peakScale(cfg) {
@@ -429,6 +512,7 @@ const MOCK = (() => {
     const s = HARDWARE.speakers.find((x) => x.key === speaker);
     Object.assign(state.config.speaker, {
       profile: speaker, name: s.name, impedance: s.impedance, powerRms: s.powerRms,
+      powerMax: s.powerMax, fsHz: s.fsHz, vasLitres: 0,
       minFrequency: s.minFrequency, recommendedHighPass: s.recommendedHighPass,
       powerLimit: s.powerLimit
     });
@@ -545,7 +629,7 @@ const MOCK = (() => {
           ok: true, firmware: '1.0.0', board: 'ESP32-S3', cores: 2,
           freeHeap: 221400, minFreeHeap: 192800, psram: 8388608, freePsram: 8130560,
           flash: 8388608, sketchSize: 1854000, freeSketchSpace: 3342336, uptime: 3725,
-          resetReason: 1, cpuLoad: 18.4, audioUnderruns: 0, audioBlocks: 1397812,
+          resetReason: 1, cpuLoad: 18.4, audioUnderruns: 0, audioBlocks: 1397812, attackDelayMs: 65,
           audioSampleRate: 48000, audioBackend: state.config.audio.backend,
           audioMaturity: 'STABLE', wifiRssi: 0, ble: false, midiRx: 4210, midiTx: 12,
           midiRxPerSecond: 6, midiTxPerSecond: 0, monitorOverflow: 0, otaAvailable: true,
@@ -638,5 +722,5 @@ const MOCK = (() => {
     }
   }
 
-  return { handle, telemetry, state, defaultConfig };
+  return { handle, telemetry, state, defaultConfig, acousticModel };
 })();

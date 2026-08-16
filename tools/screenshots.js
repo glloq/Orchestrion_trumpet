@@ -144,11 +144,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   await tab('Audio');
   await shot('settings-audio', { fit: false });
+  await unfold('Chamber, cone and leadpipe');
+  await shot('settings-acoustic', { fit: false });
+  // The derived block sits at the bottom of that disclosure.
+  await page.evaluate(() => {
+    const body = document.querySelector('.modal-body');
+    body.scrollTop = body.scrollHeight;
+  });
+  await sleep(500);
+  await shot('settings-acoustic-derived', { fit: false });
   await unfold('I²S / I²C pins and DMA');
   await shot('settings-pins', { fit: false });
 
   await tab('Pistons');
   await shot('settings-pistons', { fit: false });
+  await page.evaluate(() => {
+    const body = document.querySelector('.modal-body');
+    body.scrollTop = body.scrollHeight;
+  });
+  await sleep(500);
+  await shot('settings-valve-sync', { fit: false });
 
   await tab('Diagnostics');
   await shot('settings-diagnostics', { fit: false });

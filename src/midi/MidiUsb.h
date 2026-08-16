@@ -13,6 +13,7 @@
 #pragma once
 
 #include "midi/IMidiTransport.h"
+#include "midi/MidiParser.h"
 
 namespace ot {
 
@@ -35,6 +36,10 @@ public:
 
 private:
     MidiUsbConfig cfg_;
+    // USB-MIDI carries SysEx split across 4-byte packets.  The payload bytes
+    // are handed to the same parser the DIN port uses, so reassembly, the
+    // 256 byte cap and the overflow counter are shared rather than duplicated.
+    MidiParser sysexParser_{MidiPort::USB};
     bool started_ = false;
     bool available_ = false;
 };

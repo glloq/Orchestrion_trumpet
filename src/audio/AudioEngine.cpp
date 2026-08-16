@@ -13,10 +13,12 @@ constexpr uint16_t kControlDivider = 32;
 
 void AudioEngine::configure(const AudioConfig& audio, const SpeakerConfig& speaker,
                             const AmplifierConfig& amplifier, const AcousticConfig& acoustic,
-                            const InstrumentConfig& instrument) {
+                            const InstrumentConfig& instrument, const ValvesConfig& valves) {
     cfg_ = audio;
     instrument_ = instrument;
     acoustic_ = acoustic;
+    valves_ = valves;
+    speakerCfg_ = speaker;
     sampleRate_ = audio.sampleRate ? audio.sampleRate : 48000;
 
     speaker_.configure(speaker);
@@ -64,7 +66,8 @@ void AudioEngine::configure(const AudioConfig& audio, const SpeakerConfig& speak
 
 void AudioEngine::rebuildFilters() {
     const float hpf = SpeakerProtection::effectiveHighPassHz(
-        cfg_.highPassHz, speaker_.recommendedHighPassHz(), acousticHighPassHz(acoustic_));
+        cfg_.highPassHz, speaker_.recommendedHighPassHz(),
+        acousticHighPassHz(acoustic_, speakerCfg_));
     highPass_.setHighPass(hpf, 0.707f, sampleRate_);
 
     for (uint8_t i = 0; i < kMaxEqBands; ++i) {
@@ -121,7 +124,10 @@ void AudioEngine::handleMessage(const MidiMessage& msg) {
             }
 
             if (!notes_.hasNote()) {
+                pending_.active = false;      // nothing left to articulate
+                lastAttackDelayMs_ = 0;
                 envelope_.noteOff();
+                currentValveMask_ = 0;
                 break;
             }
             if (!changed && wasSounding) break;   // a held lower note stays
@@ -135,15 +141,26 @@ void AudioEngine::handleMessage(const MidiMessage& msg) {
             const bool fromSilence = !wasSounding;
             const bool articulate = fromSilence || !instrument_.legato || instrument_.retrigger;
 
-            if (fromSilence || portamentoCoef_ == 0.0f) currentPitch_ = targetPitch_;
+            // Wait for the pistons.  The valve engine received the same
+            // Note-On at the same instant, but its actuators are mechanical:
+            // starting the attack now would sound the first tens of
+            // milliseconds through the previous fingering.
+            const uint32_t delay = valveDelaySamples(notes_.activeNote());
+
+            if (fromSilence || portamentoCoef_ == 0.0f) {
+                // The pitch is only committed once the note is allowed to
+                // speak; moving it early would bend the note still sounding.
+                if (delay == 0) currentPitch_ = targetPitch_;
+            }
 
             if (articulate) {
-                envelope_.noteOn(fromSilence || instrument_.retrigger);
-                if (fromSilence || instrument_.retrigger) {
-                    additive_.resetPhase();
-                    wavetable_.resetPhase();
+                if (delay > 0) {
+                    pending_.active = true;
+                    pending_.fromSilence = fromSilence;
+                    pending_.samples = delay;
+                } else {
+                    startArticulation(fromSilence);
                 }
-                noteAgeSamples_ = 0;
             }
             break;
         }
@@ -302,11 +319,51 @@ void AudioEngine::updateControlRate() {
     smoothedAmplitude_ += (amplitude - smoothedAmplitude_) * 0.25f;
 }
 
+void AudioEngine::startArticulation(bool fromSilence) {
+    currentPitch_ = (fromSilence || portamentoCoef_ == 0.0f) ? targetPitch_ : currentPitch_;
+    envelope_.noteOn(fromSilence || instrument_.retrigger);
+    if (fromSilence || instrument_.retrigger) {
+        additive_.resetPhase();
+        wavetable_.resetPhase();
+    }
+    noteAgeSamples_ = 0;
+}
+
+uint32_t AudioEngine::valveDelaySamples(uint8_t soundingNote) {
+    lastAttackDelayMs_ = 0;
+    const uint8_t available = valves_.count >= kMaxValves
+                                  ? 0xFFu
+                                  : static_cast<uint8_t>((1u << valves_.count) - 1u);
+    uint8_t target = transposer_.fingeringForMidiNote(soundingNote);
+    target = (target == kNoFingering) ? 0u : static_cast<uint8_t>(target & available);
+
+    const uint16_t ms = noteAttackDelayMs(valves_, currentValveMask_, target);
+    currentValveMask_ = target;
+    if (ms == 0) return 0;
+    lastAttackDelayMs_ = ms;
+    return (static_cast<uint32_t>(ms) * sampleRate_) / 1000u;
+}
+
+// Counted at block boundaries: 128 frames is 2.7 ms at 48 kHz, well under the
+// tens of milliseconds a piston needs, and it keeps the per-sample loop clean.
+void AudioEngine::schedulePendingArticulation(size_t frames) {
+    if (!pending_.active) return;
+    const uint32_t f = static_cast<uint32_t>(frames);
+    if (pending_.samples > f) {
+        pending_.samples -= f;
+        return;
+    }
+    pending_.samples = 0;
+    pending_.active = false;
+    startArticulation(pending_.fromSilence);
+}
+
 void AudioEngine::renderBlock(float* out, size_t frames) {
     // Drain the MIDI queue at block boundaries: bounded work, no locking.
     MidiMessage msg;
     uint8_t guard = 0;
     while (guard++ < 32 && queue_.pop(msg)) handleMessage(msg);
+    schedulePendingArticulation(frames);
 
     if (!started_) {
         for (size_t i = 0; i < frames; ++i) out[i] = 0.0f;

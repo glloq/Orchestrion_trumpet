@@ -160,6 +160,9 @@ const Wizard = (() => {
               set('speaker.name', s.name);
               set('speaker.impedance', s.impedance);
               set('speaker.powerRms', s.powerRms);
+              set('speaker.powerMax', s.powerMax);
+              set('speaker.fsHz', s.fsHz || 0);
+              set('speaker.minFrequency', s.minFrequency);
               set('speaker.recommendedHighPass', s.recommendedHighPass);
               set('speaker.powerLimit', s.powerLimit);
             }

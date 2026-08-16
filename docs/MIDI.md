@@ -155,7 +155,7 @@ behind the trumpet stops too.
 | CC 121 — Reset Controllers | Controllers back to their defaults. |
 | CC 123 — All Notes Off | Notes released, valves released. |
 | Real-time (clock, start, stop, …) | Parsed and routed; the engines ignore them. |
-| Program Change, SysEx | Parsed and routed; the sound engine ignores them. The parser has a 256 byte SysEx buffer and counts what it had to drop. |
+| Program Change, SysEx | Parsed and routed; the sound engine ignores them. The parser has a 256 byte SysEx buffer and counts what it had to drop. USB-MIDI splits SysEx across 4-byte packets: those payload bytes are handed to the same parser the DIN port uses (code index numbers 0x4–0x7), so reassembly, the buffer cap and the overflow counter are shared rather than duplicated. |
 | MPE | Not implemented. The architecture is extensible — per-note pitch would require a polyphonic voice allocator — but nothing pretends to support it today. |
 
 ---
@@ -212,6 +212,23 @@ And the incoming stream can be interpreted either way:
   instrument from a trumpet part.
 
 ---
+
+## What has and has not been tested on hardware
+
+The parser, the router, the filters and the monophonic priority are covered by
+the host suite. **The transports are not**: a native build cannot exercise
+TinyUSB, Bluedroid, a UART at 31250 baud or a UDP socket. Compiling for the
+ESP32 proves the code builds, not that a DAW enumerates the device.
+
+Until a conformance pass has been run on real hardware, treat the transports as
+built-and-reviewed rather than verified. The pass to run, per transport and per
+host (Windows / macOS / Linux / Raspberry Pi):
+
+```
+Note On/Off      CC        Pitch Bend    Aftertouch
+Program Change   Clock     Start/Stop    SysEx round trip
+Panic            hot plug  reconnect     running status under load
+```
 
 ## MIDI monitor
 

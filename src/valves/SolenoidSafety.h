@@ -9,8 +9,24 @@
 //  Rules enforced:
 //    * pull-in at full power for a short burst, then drop to the hold level;
 //    * a hard maximum continuous ON time -> release + latched fault;
-//    * a long term duty cycle ceiling -> forced cooldown;
+//    * a long term *thermal* ceiling -> forced cooldown;
 //    * the guard keeps running even if MIDI stops arriving.
+//
+//  Three quantities are tracked separately, because conflating them is exactly
+//  how this guard gets it wrong:
+//
+//    1. continuous mechanical ON time  - how long the plunger has been down,
+//       whatever PWM level holds it there.  Compared against `maxOnMs`.
+//    2. applied PWM duty               - the electrical drive, 100% during
+//       pull-in and `holdPwm` afterwards.
+//    3. thermal load                   - the heating the coil actually sees.
+//       A coil is an inductor: the PWM current is smoothed, so I is roughly
+//       proportional to the duty and the dissipation to I^2*R.  The load is
+//       therefore integrated as duty^2 * dt and reported back as the
+//       equivalent *continuous* duty that would heat the coil the same way.
+//       Holding at 35% is 35% of thermal duty, not 100% because the plunger
+//       happens to be down - the hold level exists precisely so a long note
+//       does not have to trip the ceiling.
 //
 //  Note on time handling: every state is carried by an explicit boolean, never
 //  by a "0 means unset" timestamp.  Zero is a perfectly legal value of the
@@ -44,26 +60,38 @@ public:
     bool inCooldown() const { return cooldown_; }
     void clearFault() { fault_ = SolenoidFault::NONE; }
 
-    // Rolling ON ratio over the observation window, 0..100.
+    // Equivalent continuous duty over the observation window, 0..100: the
+    // steady drive level that would heat the coil as much as what it has
+    // actually seen.  This is what `maxDutyPercent` is compared against.
     uint8_t measuredDutyPercent() const;
+
+    // How long the plunger has been continuously down, in ms.  Independent of
+    // the PWM level and never reset by the observation window sliding.
+    uint32_t continuousOnMs(uint32_t nowMs) const;
 
 private:
     void startWindowIfNeeded(uint32_t nowMs);
-    void energise(uint32_t nowMs, uint8_t percent);
-    void deEnergise(uint32_t nowMs);
+    // Integrates the load produced since the last change and moves to `percent`.
+    void setDuty(uint32_t nowMs, uint8_t percent);
+    void accumulate(uint32_t nowMs);
     void trip(SolenoidFault fault, uint32_t nowMs);
+    uint32_t loadSince(uint32_t nowMs) const;
 
     ValveConfig cfg_;
-    uint32_t onSinceMs_ = 0;
+    // 1. mechanical: set when the coil goes from off to on, never touched again
+    //    until it goes off.
+    uint32_t continuousOnSinceMs_ = 0;
+    // 2./3. thermal: `loadSinceMs_` marks the start of the current duty step,
+    //    `loadAccumulatorPct2Ms_` the integral of duty^2*dt over the window.
+    uint32_t loadSinceMs_ = 0;
+    uint32_t loadAccumulatorPct2Ms_ = 0;
     uint32_t lastUpdateMs_ = 0;
     uint32_t cooldownUntilMs_ = 0;
     uint32_t windowStartMs_ = 0;
-    uint32_t onAccumulatorMs_ = 0;
     uint32_t windowLengthMs_ = 10000;
     uint8_t duty_ = 0;
     SolenoidFault fault_ = SolenoidFault::NONE;
     bool requested_ = false;
-    bool energised_ = false;
     bool cooldown_ = false;
     bool windowStarted_ = false;
 };

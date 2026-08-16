@@ -123,7 +123,8 @@ bool AppController::safeMode() const {
 bool AppController::startAudio() {
     const InstrumentConfiguration& cfg = config_.config();
 
-    audioEngine_.configure(cfg.audio, cfg.speaker, cfg.amplifier, cfg.acoustic, cfg.instrument);
+    audioEngine_.configure(cfg.audio, cfg.speaker, cfg.amplifier, cfg.acoustic, cfg.instrument,
+                           cfg.valves);
     audioEngine_.begin();
     audioEngine_.setMuted(true);
 
