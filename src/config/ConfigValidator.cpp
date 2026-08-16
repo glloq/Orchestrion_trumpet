@@ -441,6 +441,97 @@ void ConfigValidator::validate(const InstrumentConfiguration& cfg, const BoardCa
     }
 }
 
+// A value that is not a number poisons every filter it touches and the only
+// symptom is silence, so it is replaced rather than clamped.
+static float finite(float v, float fallback) {
+    return (v == v && v > -1e30f && v < 1e30f) ? v : fallback;
+}
+
+void ConfigValidator::sanitiseVoicing(VoicingConfig& v) {
+    const VoicingConfig d;
+
+    v.name[kNameLen - 1] = '\0';
+    if (static_cast<uint8_t>(v.engine) > static_cast<uint8_t>(SynthEngineType::BRASS_EXCITER)) {
+        v.engine = SynthEngineType::ADDITIVE;
+    }
+
+    v.envelope.attackMs = clampValue(finite(v.envelope.attackMs, d.envelope.attackMs), 0.5f, 500.0f);
+    v.envelope.decayMs = clampValue(finite(v.envelope.decayMs, d.envelope.decayMs), 1.0f, 2000.0f);
+    v.envelope.sustain = clampValue(finite(v.envelope.sustain, d.envelope.sustain), 0.0f, 1.0f);
+    v.envelope.releaseMs =
+        clampValue(finite(v.envelope.releaseMs, d.envelope.releaseMs), 1.0f, 3000.0f);
+    v.envelope.attackNoise =
+        clampValue(finite(v.envelope.attackNoise, d.envelope.attackNoise), 0.0f, 1.0f);
+    v.envelope.breathNoise =
+        clampValue(finite(v.envelope.breathNoise, d.envelope.breathNoise), 0.0f, 0.5f);
+
+    v.vibrato.frequencyHz =
+        clampValue(finite(v.vibrato.frequencyHz, d.vibrato.frequencyHz), 0.1f, 20.0f);
+    v.vibrato.depthCents = clampValue(finite(v.vibrato.depthCents, 0.0f), 0.0f, 200.0f);
+    v.vibrato.delayMs = clampValue(finite(v.vibrato.delayMs, 0.0f), 0.0f, 5000.0f);
+    v.vibrato.fadeInMs = clampValue(finite(v.vibrato.fadeInMs, 1.0f), 1.0f, 5000.0f);
+
+    if (v.additive.harmonicCount == 0) v.additive.harmonicCount = 1;
+    if (v.additive.harmonicCount > kMaxHarmonics) v.additive.harmonicCount = kMaxHarmonics;
+    for (uint8_t i = 0; i < kMaxHarmonics; ++i) {
+        v.additive.harmonicGain[i] = clampValue(finite(v.additive.harmonicGain[i], 0.0f), 0.0f, 2.0f);
+    }
+    v.additive.velocityBrightness = clampValue(finite(v.additive.velocityBrightness, 0.85f), 0.0f, 1.0f);
+    v.additive.breathBrightness = clampValue(finite(v.additive.breathBrightness, 0.7f), 0.0f, 1.0f);
+    v.additive.expressionBrightness =
+        clampValue(finite(v.additive.expressionBrightness, 0.35f), 0.0f, 1.0f);
+    v.additive.pitchBrightness = clampValue(finite(v.additive.pitchBrightness, 0.3f), 0.0f, 1.0f);
+
+    v.exciter.drive = clampValue(finite(v.exciter.drive, d.exciter.drive), 0.1f, 12.0f);
+    v.exciter.asymmetry = clampValue(finite(v.exciter.asymmetry, 0.0f), -1.0f, 1.0f);
+    v.exciter.pressure = clampValue(finite(v.exciter.pressure, d.exciter.pressure), 0.0f, 1.0f);
+    v.exciter.pressureToDrive = clampValue(finite(v.exciter.pressureToDrive, 0.0f), 0.0f, 4.0f);
+    v.exciter.noiseAmount = clampValue(finite(v.exciter.noiseAmount, 0.0f), 0.0f, 1.0f);
+    v.exciter.transientMs =
+        clampValue(finite(v.exciter.transientMs, d.exciter.transientMs), 0.5f, 500.0f);
+
+    v.darkTilt = clampValue(finite(v.darkTilt, d.darkTilt), 0.0f, 6.0f);
+    v.brightTilt = clampValue(finite(v.brightTilt, d.brightTilt), 0.0f, 6.0f);
+    v.hybridMix = clampValue(finite(v.hybridMix, d.hybridMix), 0.0f, 1.0f);
+    v.velocityFloor = clampValue(finite(v.velocityFloor, d.velocityFloor), 0.0f, 1.0f);
+    v.breathToVolume = clampValue(finite(v.breathToVolume, 1.0f), 0.0f, 1.0f);
+    v.expressionToVolume = clampValue(finite(v.expressionToVolume, 1.0f), 0.0f, 1.0f);
+    v.aftertouchToBrightness = clampValue(finite(v.aftertouchToBrightness, 0.25f), 0.0f, 1.0f);
+    v.aftertouchToVolume = clampValue(finite(v.aftertouchToVolume, 0.0f), 0.0f, 1.0f);
+
+    if (v.pitchBendRangeSemitones == 0 || v.pitchBendRangeSemitones > 48) {
+        v.pitchBendRangeSemitones = 2;
+    }
+
+    // The trim sits before the limiter, so it cannot get past the protection
+    // stage - but +40 dB of it would make the limiter the only thing between
+    // the DSP and the coil, which is not a state to leave an instrument in.
+    v.outputTrimDb = clampValue(finite(v.outputTrimDb, 0.0f), -24.0f, 12.0f);
+
+    for (uint8_t i = 0; i < kMaxEqBands; ++i) {
+        v.eq[i].frequency = clampValue(finite(v.eq[i].frequency, 1000.0f), 20.0f, 20000.0f);
+        v.eq[i].gainDb = clampValue(finite(v.eq[i].gainDb, 0.0f), -18.0f, 18.0f);
+        v.eq[i].q = clampValue(finite(v.eq[i].q, 0.7f), 0.1f, 10.0f);
+    }
+
+    for (uint8_t i = 0; i < kRegisterPoints; ++i) {
+        if (v.registerCurve[i].note > 127) v.registerCurve[i].note = 127;
+        v.registerCurve[i].gainDb = clampValue(finite(v.registerCurve[i].gainDb, 0.0f), -18.0f, 12.0f);
+        v.registerCurve[i].brightness =
+            clampValue(finite(v.registerCurve[i].brightness, 0.0f), -1.0f, 1.0f);
+    }
+    // The curve is interpolated by walking it in order; an unsorted curve
+    // would silently skip breakpoints. Sorting beats rejecting: the builder
+    // dragged a point past its neighbour, they did not make a mistake.
+    for (uint8_t i = 1; i < kRegisterPoints; ++i) {
+        for (uint8_t j = i; j > 0 && v.registerCurve[j].note < v.registerCurve[j - 1].note; --j) {
+            const RegisterPoint tmp = v.registerCurve[j];
+            v.registerCurve[j] = v.registerCurve[j - 1];
+            v.registerCurve[j - 1] = tmp;
+        }
+    }
+}
+
 bool ConfigValidator::sanitise(InstrumentConfiguration& cfg, const BoardCapabilities& caps) {
     bool changed = false;
 
@@ -471,6 +562,11 @@ bool ConfigValidator::sanitise(InstrumentConfiguration& cfg, const BoardCapabili
         cfg.midi.globalChannelMask = 0xFFFF;
         changed = true;
     }
+    sanitiseVoicing(cfg.voicing);
+    for (uint8_t i = 0; i < cfg.voicings.count && i < kMaxVoicings; ++i) {
+        sanitiseVoicing(cfg.voicings.items[i]);
+    }
+
     for (uint8_t i = 0; i < kMaxValves; ++i) {
         ValveConfig& v = cfg.valves.items[i];
         if (v.type != ValveActuatorType::SOLENOID) continue;

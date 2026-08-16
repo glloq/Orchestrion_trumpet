@@ -22,7 +22,7 @@ const char* const kAmp[] = {"NONE", "MAX98357_INTERNAL", "TPA3118D2", "TAS5760_I
 const char* const kSpeaker[] = {"VISATON_FRS5_XTS", "DAYTON_CE70PR4", "VISATON_FRS8M",
                                 "MONACOR_SPX30M", "CUSTOM"};
 const char* const kCoupling[] = {"OPEN", "SEALED_CHAMBER", "CUSTOM_CHAMBER"};
-const char* const kEngine[] = {"SINE", "ADDITIVE", "WAVETABLE", "HYBRID"};
+const char* const kEngine[] = {"SINE", "ADDITIVE", "WAVETABLE", "HYBRID", "BRASS_EXCITER"};
 const char* const kActuator[] = {"SERVO", "SOLENOID", "DISABLED"};
 const char* const kServoDriver[] = {"ESP32_PWM", "PCA9685"};
 const char* const kValveMode[] = {"AUTO", "MANUAL", "MIDI_CC", "DISABLED"};

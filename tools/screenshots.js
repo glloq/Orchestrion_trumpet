@@ -112,6 +112,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.screenshot({ path: path.join(OUT, 'configure-fingering.png') });
   console.log('  configure-fingering.png');
 
+  console.log('Sound Lab');
+  await view('soundlab');
+  await sleep(500);
+  await shot('soundlab-quick');
+  await page.click('.modal-tab:text-is("Voicing")');
+  await sleep(700);
+  await shot('soundlab-voicing');
+  await page.click('.modal-tab:text-is("Expert")');
+  await sleep(700);
+  await shot('soundlab-expert');
+
   console.log('Wiring');
   await view('wiring');
   await shot('wiring');

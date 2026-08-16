@@ -59,6 +59,16 @@ public:
     // when a stored file is damaged: better a safe instrument than none.
     static bool sanitise(InstrumentConfiguration& cfg, const BoardCapabilities& caps);
 
+    // Clamp a voicing into the range the DSP can actually run.  This is the
+    // guard on the LIVE path: /api/audio/preview hands whatever the browser
+    // sent straight to the audio task, so a NaN, a negative attack or a
+    // 400 dB trim has to be caught here and not by the limiter.
+    //
+    // It never touches anything outside the voicing.  Impedance, power
+    // limits, the hard ceiling, the pins and the backend are not reachable
+    // from a preview by construction: they are not in this structure.
+    static void sanitiseVoicing(VoicingConfig& voicing);
+
     static const char* toString(Severity s);
 };
 

@@ -4,8 +4,10 @@
 'use strict';
 
 const App = (() => {
-  const VIEWS = { play: Pages.play, configure: Pages.configure, wiring: Pages.wiring };
-  const TITLES = { play: 'Play', configure: 'Configure', wiring: 'Wiring' };
+  const VIEWS = { play: Pages.play, configure: Pages.configure,
+                  soundlab: SoundLab.render, wiring: Pages.wiring };
+  const TITLES = { play: 'Play', configure: 'Configure',
+                   soundlab: 'Sound Lab', wiring: 'Wiring' };
 
   const state = { config: null, saved: null, hardware: null, status: null,
                   telemetry: null, view: 'play', dirty: false };
@@ -55,8 +57,11 @@ const App = (() => {
     UI.clear(host);
     host.updateLive = null;
     if (!state.config) return;
-    VIEWS[state.view](host);
-    if (state.telemetry && host.updateLive) host.updateLive(state.telemetry);
+    // A view may be async (Sound Lab fetches the voicing library first); the
+    // live telemetry is applied once it has finished building.
+    const built = VIEWS[state.view](host);
+    const finish = () => { if (state.telemetry && host.updateLive) host.updateLive(state.telemetry); };
+    if (built && typeof built.then === 'function') built.then(finish); else finish();
   }
 
   async function reload() {

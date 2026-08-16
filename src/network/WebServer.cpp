@@ -145,6 +145,15 @@ void HttpServerModule::registerRoutes() {
     bind("/api/audio/test", HTTP_POST, &HttpServerModule::handleAudioTest);
     bind("/api/audio/mute", HTTP_POST, &HttpServerModule::handleAudioMute);
     bind("/api/audio/volume", HTTP_POST, &HttpServerModule::handleAudioVolume);
+    // The live voicing path.  These three, and only these three, change the
+    // sound without a reboot; nothing outside VoicingConfig is reachable here.
+    bind("/api/audio/preview", HTTP_POST, &HttpServerModule::handleAudioPreview);
+    bind("/api/audio/revert", HTTP_POST, &HttpServerModule::handleAudioRevert);
+    bind("/api/audio/commit", HTTP_POST, &HttpServerModule::handleAudioCommit);
+    bind("/api/voicings", HTTP_GET, &HttpServerModule::handleVoicings);
+    bind("/api/voicings/save", HTTP_POST, &HttpServerModule::handleVoicingSave);
+    bind("/api/voicings/load", HTTP_POST, &HttpServerModule::handleVoicingLoad);
+    bind("/api/voicings/delete", HTTP_POST, &HttpServerModule::handleVoicingDelete);
     bind("/api/valve/test", HTTP_POST, &HttpServerModule::handleValveTest);
     bind("/api/valve/mode", HTTP_POST, &HttpServerModule::handleValveMode);
     bind("/api/valve/manual", HTTP_POST, &HttpServerModule::handleValveManual);
@@ -901,6 +910,148 @@ void HttpServerModule::handleMidiMonitorControl() {
 
 void HttpServerModule::handleMidiMonitorClear() {
     app_->monitor().clear();
+    sendOk();
+}
+
+// ---------------------------------------------------------------------------
+// Live voicing
+//
+// The whole point of this trio: a slider in the browser has to be audible
+// before the hand leaves it.  PREVIEW changes the sound now and nothing else;
+// REVERT puts back the sound that is actually stored; COMMIT makes the live
+// sound the stored one.  Nothing here writes to flash except COMMIT.
+// ---------------------------------------------------------------------------
+void HttpServerModule::handleAudioPreview() {
+    JsonDocument doc;
+    if (deserializeJson(doc, g_http->arg("plain")) != DeserializationError::Ok) {
+        sendError(400, "expected a voicing object");
+        return;
+    }
+    // Start from the voicing that is sounding, so a partial body is a patch
+    // rather than a reset to the factory sound.
+    VoicingConfig next = app_->audio().voicing();
+    readVoicing(doc.as<JsonObjectConst>(), next);
+    // The guard on the live path: whatever the browser sent, the DSP only ever
+    // sees values it can run.
+    ConfigValidator::sanitiseVoicing(next);
+    app_->audio().requestVoicing(next);
+
+    JsonDocument out;
+    out["ok"] = true;
+    // Echo what was actually applied, so the UI can show a clamped value
+    // instead of pretending the slider went where it was dragged.
+    writeVoicing(out["voicing"].to<JsonObject>(), next);
+    const size_t n = serializeJson(out, g_buffer, sizeof(g_buffer));
+    sendJson(200, g_buffer, n);
+}
+
+void HttpServerModule::handleAudioRevert() {
+    app_->audio().requestVoicing(app_->configManager().config().voicing);
+    sendOk();
+}
+
+void HttpServerModule::handleAudioCommit() {
+    InstrumentConfiguration next = app_->configManager().config();
+    next.voicing = app_->audio().voicing();
+    ValidationReport report;
+    if (!app_->configManager().applyAndSave(next, report)) {
+        sendError(422, "the configuration was refused");
+        return;
+    }
+    sendOk();
+}
+
+void HttpServerModule::handleVoicings() {
+    const InstrumentConfiguration& cfg = app_->configManager().config();
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["capacity"] = kMaxVoicings;
+    writeVoicing(doc["live"].to<JsonObject>(), app_->audio().voicing());
+    writeVoicing(doc["saved"].to<JsonObject>(), cfg.voicing);
+    JsonArray items = doc["items"].to<JsonArray>();
+    for (uint8_t i = 0; i < cfg.voicings.count && i < kMaxVoicings; ++i) {
+        writeVoicing(items.add<JsonObject>(), cfg.voicings.items[i]);
+    }
+    const size_t n = serializeJson(doc, g_buffer, sizeof(g_buffer));
+    sendJson(200, g_buffer, n);
+}
+
+// Stores the voicing that is currently sounding under a name.  Saving over an
+// existing name replaces it, which is what "save" means to everyone.
+void HttpServerModule::handleVoicingSave() {
+    JsonDocument doc;
+    deserializeJson(doc, g_http->arg("plain"));
+    const char* name = doc["name"] | "";
+    if (!name[0]) {
+        sendError(400, "a voicing needs a name");
+        return;
+    }
+    InstrumentConfiguration next = app_->configManager().config();
+    VoicingConfig entry = app_->audio().voicing();
+    copyString(entry.name, sizeof(entry.name), name);
+
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < next.voicings.count; ++i) {
+        if (strEqualsI(next.voicings.items[i].name, name)) {
+            slot = static_cast<int8_t>(i);
+            break;
+        }
+    }
+    if (slot < 0) {
+        if (next.voicings.count >= kMaxVoicings) {
+            sendError(409, "no free voicing slot: delete one first");
+            return;
+        }
+        slot = static_cast<int8_t>(next.voicings.count++);
+    }
+    next.voicings.items[slot] = entry;
+    next.voicing = entry;   // saving also makes it the sound that boots
+
+    ValidationReport report;
+    if (!app_->configManager().applyAndSave(next, report)) {
+        sendError(422, "the configuration was refused");
+        return;
+    }
+    app_->audio().requestVoicing(entry);
+    sendOk();
+}
+
+void HttpServerModule::handleVoicingLoad() {
+    JsonDocument doc;
+    deserializeJson(doc, g_http->arg("plain"));
+    const char* name = doc["name"] | "";
+    const InstrumentConfiguration& cfg = app_->configManager().config();
+    for (uint8_t i = 0; i < cfg.voicings.count; ++i) {
+        if (!strEqualsI(cfg.voicings.items[i].name, name)) continue;
+        // Loaded live, not saved: auditioning a stored voicing must not
+        // overwrite the one that boots.
+        app_->audio().requestVoicing(cfg.voicings.items[i]);
+        sendOk();
+        return;
+    }
+    sendError(404, "no voicing by that name");
+}
+
+void HttpServerModule::handleVoicingDelete() {
+    JsonDocument doc;
+    deserializeJson(doc, g_http->arg("plain"));
+    const char* name = doc["name"] | "";
+    InstrumentConfiguration next = app_->configManager().config();
+    bool found = false;
+    for (uint8_t i = 0; i < next.voicings.count; ++i) {
+        if (!found && strEqualsI(next.voicings.items[i].name, name)) found = true;
+        if (found && i + 1 < next.voicings.count) next.voicings.items[i] = next.voicings.items[i + 1];
+    }
+    if (!found) {
+        sendError(404, "no voicing by that name");
+        return;
+    }
+    --next.voicings.count;
+    ValidationReport report;
+    if (!app_->configManager().applyAndSave(next, report)) {
+        sendError(422, "the configuration was refused");
+        return;
+    }
     sendOk();
 }
 

@@ -35,6 +35,13 @@ private:
     void handleAudioTest();
     void handleAudioMute();
     void handleAudioVolume();
+    void handleAudioPreview();
+    void handleAudioRevert();
+    void handleAudioCommit();
+    void handleVoicings();
+    void handleVoicingSave();
+    void handleVoicingLoad();
+    void handleVoicingDelete();
     void handleValveTest();
     void handleValveMode();
     void handleValveManual();

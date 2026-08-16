@@ -48,6 +48,7 @@ deliberately small, and everything rare or dangerous is one level down.
 |---|---|
 | **Play** | STOP / Re-arm, valve mode, the live trumpet with the pistons following the fingering, the ≥2-octave keyboard, the controller strip (velocity, bend, CC1, CC2, CC11, volume), and the Now playing / Audio / MIDI connections cards. |
 | **Configure** | Board, one-click presets, instrument (transposition, priority, legato, portamento, range), calibration, the validation report, and the wizard launcher. |
+| **Sound Lab** | Where the instrument is voiced. Three levels — Quick Tune, Voicing, Expert — A/B comparison, named voicing presets, and a guided order to work in. Everything on it is live. |
 | **Wiring** | The harness drawn from the current configuration, downloadable as SVG; the electrical declarations; and the power / bulk-capacitor table. |
 
 | Settings tab | What it is for |
@@ -58,6 +59,48 @@ deliberately small, and everything rare or dangerous is one level down.
 | **Pistons** | Valve count, mode, per-valve actuator, driver, GPIO or PCA9685 channel, angles, speed, solenoid timing, attack synchronisation, plus test pulse and go-released / go-pressed. |
 | **Diagnostics** | Firmware, memory, audio, MIDI and valve state, and the MIDI monitor with pause, clear and per-source / per-type filters. |
 | **Firmware** | Version, OTA upload with progress, reboot, factory reset. |
+
+### Sound Lab
+
+Voicing a driver behind a cone behind a real trumpet is not a settings screen,
+it is a session: hours of small changes, each judged by ear against the last.
+Three things make that possible.
+
+**Everything is live.** A slider posts to `/api/audio/preview`; the firmware
+drops the voicing into a lock-free mailbox and the audio task picks it up at
+the start of the next block — about 2.7 ms at 48 kHz with 128-frame blocks.
+Nothing is saved and nothing reboots until you press Save. Modify → save →
+reboot → listen is far too slow to find a sound with.
+
+**A/B.** After twenty minutes of tuning nobody can still remember whether the
+result is actually better. A and B are two complete voicings held in the
+browser; switching is one preview call, so the comparison is instant and the
+ear has nothing to fill in with.
+
+**Macros first, parameters second.** Quick Tune offers seven musical controls —
+Body ↔ Brightness, Soft ↔ Brassy, Clean ↔ Breath, Soft ↔ Sharp attack,
+Dynamics, Warm ↔ Presence, Output — each moving several real parameters at
+once. "What the macros changed" shows exactly which, and every one of those
+numbers is editable one level down. Nobody voices an instrument by typing
+`harmonic 7 = 0.137`, but everybody wants to see that number once it sounds
+right.
+
+The macros are computed **in the browser**. The device only ever receives a
+voicing and has no idea a macro exists, which is what keeps the firmware's idea
+of "the sound" one serialisable object. They are applied to the factory value
+of the fields they own, not to the current value, so dragging one back to the
+middle really does undo it instead of drifting.
+
+| Level | What it shows |
+|---|---|
+| **Quick Tune** | the seven macros, and what they changed |
+| **Voicing** | generator, 16 harmonic levels, spectral tilts, dynamics weights, envelope, vibrato, register compensation, 6 EQ bands, output trim |
+| **Expert** | the brass exciter, the whole voicing as JSON, and a list of what is deliberately *not* editable here |
+
+The page ends with **Tune my sound**, the order that works: level, then speaker
+and cone, then low/high balance, then harmonic richness, then attack and
+breath, then dynamics, then register balance, then A/B, then save. Voicing out
+of order means doing the register twice.
 
 ### The MIDI monitor
 
@@ -144,6 +187,14 @@ exported and imported:
 
 ![Fingering table](../img/screenshots/configure-fingering.png)
 
+### Sound Lab
+
+| | |
+|---|---|
+| ![Quick Tune](../img/screenshots/soundlab-quick.png) | ![Voicing](../img/screenshots/soundlab-voicing.png) |
+
+![Expert](../img/screenshots/soundlab-expert.png)
+
 ### Settings
 
 | | |
@@ -216,6 +267,13 @@ All responses are JSON and carry `"ok"`.
 | `POST` | `/api/audio/test` | `{"type":"tone"\|"sweep"\|"stop", …}` |
 | `POST` | `/api/audio/mute` | `{"muted":true}` |
 | `POST` | `/api/audio/volume` | `{"volume":0.0–1.0}` |
+| `POST` | `/api/audio/preview` | A voicing, applied on the next audio block. Saves nothing. Echoes back what was actually applied after clamping. |
+| `POST` | `/api/audio/revert` | Back to the stored voicing |
+| `POST` | `/api/audio/commit` | The live voicing becomes the stored one |
+| `GET` | `/api/voicings` | The live voicing, the stored one, and the named library |
+| `POST` | `/api/voicings/save` | `{"name":"Prototype 07"}` — stores the live voicing under a name |
+| `POST` | `/api/voicings/load` | Loads a named voicing **live**, without saving it |
+| `POST` | `/api/voicings/delete` | Removes one from the library |
 | `POST` | `/api/valve/test` | `{"valve":0,"durationMs":300}` |
 | `POST` | `/api/valve/mode` | `{"mode":"AUTO"}` |
 | `POST` | `/api/valve/manual` | `{"valve":0,"pressed":true}` |

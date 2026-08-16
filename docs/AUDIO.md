@@ -206,6 +206,133 @@ right pace by pacing itself on the FreeRTOS clock, so the rest of the firmware
 behaves identically — it just makes no sound. It is what SAFE MODE uses, and
 what a valve-only instrument uses.
 
+## The voicing, and what may change live
+
+The sound and the safety are two different things and are now two different
+structures.
+
+```
+VoicingConfig                      AudioConfig / SpeakerConfig / AmplifierConfig
+────────────                       ─────────────────────────────────────────────
+generator                          backend, sample rate, bit depth, block, DMA
+16 harmonic levels                 I²S / I²C pins, codec address
+spectral tilts                     speaker impedance, RMS and maximum power
+hybrid mix                         protection limit, hard ceiling, DC blocker
+envelope, noises                   amplifier type, gain, volume limit
+vibrato                            master volume
+dynamics weights                   startup mute
+6 EQ bands
+register compensation
+exciter
+output trim
+      ↓                                          ↓
+CHANGES LIVE, no reboot            validation + save + reboot
+POST /api/audio/preview            PUT /api/config
+```
+
+A voicing is the **only** thing the live path can touch. That is enforced by
+construction rather than by a check: `/api/audio/preview` deserialises into a
+`VoicingConfig`, and impedance, power ratings, the protection limit and the
+pins are simply not members of it. A laboratory slider that can switch off the
+thing protecting the coil is not a laboratory slider.
+
+### How live it actually is
+
+```
+slider  ->  POST /api/audio/preview  ->  ConfigValidator::sanitiseVoicing
+        ->  single-slot mailbox in AudioEngine
+        ->  picked up at the start of the next audio block   (2.7 ms @ 48 kHz)
+        ->  sound
+```
+
+The network task never touches a DSP object. It writes one `VoicingConfig`
+into a mailbox and sets a flag; the audio task drains it before the MIDI queue,
+so a preview and the notes that follow it in the same block agree about the
+sound. A ring buffer would be pointless here — a slider produces far more
+updates than there are blocks and only the newest one matters.
+
+Changing a voicing deliberately does **not** retrigger the note being
+auditioned. Restarting the envelope on every slider movement makes a live
+preview useless.
+
+`sanitiseVoicing()` is the guard on that path and is host-tested. It replaces
+NaN rather than clamping it (a NaN poisons every filter it touches and the only
+symptom is silence), clamps every range, and sorts the register curve — which
+is walked in order, so an unsorted one would silently skip breakpoints.
+
+Three actions, and only the third writes to flash:
+
+| Action | Endpoint | Effect |
+|---|---|---|
+| Preview | `POST /api/audio/preview` | changes the sound now, saves nothing |
+| Revert | `POST /api/audio/revert` | back to the stored voicing |
+| Commit | `POST /api/audio/commit` | the live sound becomes the stored one |
+
+### Named voicings
+
+Up to four, stored beside the configuration and deliberately separate from the
+hardware presets: the hardware preset says what the instrument is made of, a
+voicing says how it should sound. One cone, several sounds.
+
+`Program Change` can select one, but only if the user turns it on: a sequencer
+sending bank changes should not silently change the sound of the instrument.
+
+### What used to be hard-coded
+
+Five numbers that had to move to match an exciter to a cone were literals in
+the DSP. They are configuration now, and a migrated instrument gets exactly the
+values that used to be compiled in, so it sounds identical:
+
+| Parameter | Was | Now |
+|---|---|---|
+| Dark spectral tilt | `2.6f` in AdditiveSynth | `voicing.darkTilt` |
+| Bright spectral tilt | `0.6f` | `voicing.brightTilt` |
+| Hybrid mix | `a * 0.6f + w * 0.4f` | `voicing.hybridMix` |
+| Velocity → amplitude | `0.25f + 0.75f * v` | `voicing.velocityFloor` |
+| Aftertouch → brightness | `0.25f` | `voicing.aftertouchToBrightness` |
+
+## Register compensation
+
+`pitchBrightness` alone is a single global slope and cannot fix a system whose
+bottom is weak, whose middle is right and whose top is harsh. Two interpolated
+curves do:
+
+```
+MIDI note  ->  output gain (dB)
+MIDI note  ->  brightness offset
+```
+
+Five breakpoints, linearly interpolated, with the end values held outside the
+range — extrapolating a correction curve is how a register fix turns into a
+broken top octave. Correcting this with the master EQ instead would wreck the
+timbre everywhere.
+
+## Brass exciter — EXPERIMENTAL
+
+A second generator, offered to be characterised against `ADDITIVE`, which stays
+the reference. It is **not** a physical model and deliberately is not one: the
+real trumpet is the resonator, so there is nothing downstream of the cone left
+to simulate.
+
+```
+oscillator ──┐
+             ├──> x drive(pressure) ──> asymmetric shaper ──> out
+air noise  ──┘
+```
+
+* the noise goes in **before** the shaper, so it is shaped: shaped noise reads
+  as breath moving through the instrument, noise added afterwards reads as hiss
+  on top of a synthesiser;
+* the **asymmetry** is what produces even harmonics — a symmetric transfer
+  function only ever gives odd ones, which is a clarinet;
+* `tanh(x)/tanh(drive)` keeps the output near unity whatever the drive, so
+  turning the drive up changes the timbre and not the level. The limiter should
+  never be the thing that decides how brassy the instrument is;
+* pressure rises over `transientMs` at the start of a note, which is what gives
+  the attack its character rather than an amplitude envelope alone.
+
+It has never been heard through a real cone. The UI says so, in those words.
+
 ## Acoustic coupling
 
 | Profile | Behaviour | Use |

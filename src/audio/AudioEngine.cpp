@@ -11,9 +11,10 @@ namespace {
 constexpr uint16_t kControlDivider = 32;
 }  // namespace
 
-void AudioEngine::configure(const AudioConfig& audio, const SpeakerConfig& speaker,
-                            const AmplifierConfig& amplifier, const AcousticConfig& acoustic,
-                            const InstrumentConfig& instrument, const ValvesConfig& valves) {
+void AudioEngine::configure(const AudioConfig& audio, const VoicingConfig& voicing,
+                            const SpeakerConfig& speaker, const AmplifierConfig& amplifier,
+                            const AcousticConfig& acoustic, const InstrumentConfig& instrument,
+                            const ValvesConfig& valves) {
     cfg_ = audio;
     instrument_ = instrument;
     acoustic_ = acoustic;
@@ -27,17 +28,6 @@ void AudioEngine::configure(const AudioConfig& audio, const SpeakerConfig& speak
 
     initSineTable();
     notes_.setPriority(instrument.notePriority);
-    envelope_.configure(cfg_.envelope, sampleRate_);
-    AdditiveConfig additiveCfg = cfg_.additive;
-    if (cfg_.engine == SynthEngineType::SINE) additiveCfg.harmonicCount = 1;
-    additive_.configure(additiveCfg, sampleRate_);
-    wavetable_.configure(cfg_.additive, sampleRate_);
-    // The LFO is advanced once per control block, not once per sample, so it
-    // must run on the control rate clock.  Handing it the audio sample rate
-    // would divide the vibrato frequency by kControlDivider - a 5.5 Hz setting
-    // would come out at 0.17 Hz.
-    vibratoLfo_.setSampleRate(sampleRate_ / kControlDivider);
-    vibratoLfo_.setFrequency(cfg_.vibrato.frequencyHz);
     testOsc_.setSampleRate(sampleRate_);
 
     limiter_.configure(cfg_.limiter, sampleRate_);
@@ -47,12 +37,6 @@ void AudioEngine::configure(const AudioConfig& audio, const SpeakerConfig& speak
     masterVolume_ = clampValue(cfg_.masterVolume, 0.0f, 1.0f);
     acousticGainLinear_ = std::pow(10.0f, acousticGainDb(acoustic_) / 20.0f);
 
-    vibratoDelaySamples_ =
-        static_cast<uint32_t>(cfg_.vibrato.delayMs * 0.001f * static_cast<float>(sampleRate_));
-    vibratoFadeSamples_ =
-        static_cast<uint32_t>(cfg_.vibrato.fadeInMs * 0.001f * static_cast<float>(sampleRate_));
-    if (vibratoFadeSamples_ == 0) vibratoFadeSamples_ = 1;
-
     if (instrument_.portamentoMs > 0.5f) {
         const float samples = instrument_.portamentoMs * 0.001f * static_cast<float>(sampleRate_) /
                               static_cast<float>(kControlDivider);
@@ -61,7 +45,55 @@ void AudioEngine::configure(const AudioConfig& audio, const SpeakerConfig& speak
         portamentoCoef_ = 0.0f;
     }
 
+    applyVoicing(voicing);
+}
+
+// Everything a live preview is allowed to change, and nothing else.  Called
+// both from configure() and, at a block boundary, from takePendingVoicing():
+// one code path, so a previewed sound is exactly the sound a reboot gives.
+void AudioEngine::applyVoicing(const VoicingConfig& voicing) {
+    voicing_ = voicing;
+
+    envelope_.configure(voicing_.envelope, sampleRate_);
+    AdditiveConfig additiveCfg = voicing_.additive;
+    if (voicing_.engine == SynthEngineType::SINE) additiveCfg.harmonicCount = 1;
+    additive_.configure(additiveCfg, sampleRate_);
+    additive_.setTilt(voicing_.darkTilt, voicing_.brightTilt);
+    wavetable_.configure(voicing_.additive, sampleRate_);
+    exciter_.configure(voicing_.exciter, sampleRate_);
+
+    // The LFO is advanced once per control block, not once per sample, so it
+    // must run on the control rate clock.  Handing it the audio sample rate
+    // would divide the vibrato frequency by kControlDivider - a 5.5 Hz setting
+    // would come out at 0.17 Hz.
+    vibratoLfo_.setSampleRate(sampleRate_ / kControlDivider);
+    vibratoLfo_.setFrequency(voicing_.vibrato.frequencyHz);
+
+    vibratoDelaySamples_ =
+        static_cast<uint32_t>(voicing_.vibrato.delayMs * 0.001f * static_cast<float>(sampleRate_));
+    vibratoFadeSamples_ =
+        static_cast<uint32_t>(voicing_.vibrato.fadeInMs * 0.001f * static_cast<float>(sampleRate_));
+    if (vibratoFadeSamples_ == 0) vibratoFadeSamples_ = 1;
+
+    // A voicing carries its own bend range; a sequencer can still override it
+    // at runtime with RPN 0.
+    pitchBendRange_ = voicing_.pitchBendRangeSemitones ? voicing_.pitchBendRangeSemitones : 2;
+    outputTrimLinear_ = std::pow(10.0f, clampValue(voicing_.outputTrimDb, -24.0f, 12.0f) / 20.0f);
+
     rebuildFilters();
+}
+
+void AudioEngine::requestVoicing(const VoicingConfig& voicing) {
+    pendingVoicing_ = voicing;
+    voicingPending_ = true;
+}
+
+void AudioEngine::takePendingVoicing() {
+    if (!voicingPending_) return;
+    voicingPending_ = false;
+    // The envelope is deliberately left alone: moving a slider must not
+    // retrigger the note being auditioned, or a live preview is useless.
+    applyVoicing(pendingVoicing_);
 }
 
 void AudioEngine::rebuildFilters() {
@@ -71,9 +103,9 @@ void AudioEngine::rebuildFilters() {
     highPass_.setHighPass(hpf, 0.707f, sampleRate_);
 
     for (uint8_t i = 0; i < kMaxEqBands; ++i) {
-        if (cfg_.eq[i].enabled) {
-            userEq_[i].setPeaking(cfg_.eq[i].frequency, cfg_.eq[i].gainDb, cfg_.eq[i].q,
-                                  sampleRate_);
+        if (voicing_.eq[i].enabled) {
+            userEq_[i].setPeaking(voicing_.eq[i].frequency, voicing_.eq[i].gainDb,
+                                  voicing_.eq[i].q, sampleRate_);
         } else {
             userEq_[i].setBypass(true);
         }
@@ -124,12 +156,19 @@ void AudioEngine::handleMessage(const MidiMessage& msg) {
             }
 
             if (!notes_.hasNote()) {
+                if (sustainDown_) {
+                    // The pedal is down: the key came up but the note has not.
+                    // Nothing is released and the valves stay where they are.
+                    sustainedNote_ = true;
+                    break;
+                }
                 pending_.active = false;      // nothing left to articulate
                 lastAttackDelayMs_ = 0;
                 envelope_.noteOff();
                 currentValveMask_ = 0;
                 break;
             }
+            sustainedNote_ = false;
             if (!changed && wasSounding) break;   // a held lower note stays
 
             currentVelocity_ = notes_.activeVelocity();
@@ -147,20 +186,21 @@ void AudioEngine::handleMessage(const MidiMessage& msg) {
             // milliseconds through the previous fingering.
             const uint32_t delay = valveDelaySamples(notes_.activeNote());
 
-            if (fromSilence || portamentoCoef_ == 0.0f) {
-                // The pitch is only committed once the note is allowed to
-                // speak; moving it early would bend the note still sounding.
-                if (delay == 0) currentPitch_ = targetPitch_;
-            }
-
-            if (articulate) {
-                if (delay > 0) {
-                    pending_.active = true;
-                    pending_.fromSilence = fromSilence;
-                    pending_.samples = delay;
-                } else {
-                    startArticulation(fromSilence);
-                }
+            if (delay > 0) {
+                // Either way the pitch waits for the pistons. A slurred note
+                // does not re-articulate, but it still must not sound through
+                // the previous fingering: gliding to the new pitch while the
+                // valves are still moving plays it through the wrong bore just
+                // as surely as a fresh attack would.
+                pending_.active = true;
+                pending_.articulate = articulate;
+                pending_.fromSilence = fromSilence;
+                pending_.samples = delay;
+                pending_.heldPitch = currentPitch_;
+                currentPitch_ = pending_.heldPitch;   // freeze until it lands
+            } else {
+                if (fromSilence || portamentoCoef_ == 0.0f) currentPitch_ = targetPitch_;
+                if (articulate) startArticulation(fromSilence);
             }
             break;
         }
@@ -179,15 +219,47 @@ void AudioEngine::handleMessage(const MidiMessage& msg) {
                 case cc::Expression:
                     ccExpression_ = msg.data2;
                     break;
+                case cc::Sustain:
+                    // CC64: >= 64 is down. Releasing the pedal releases a note
+                    // whose key has already come up.
+                    sustainDown_ = msg.data2 >= 64;
+                    if (!sustainDown_) releaseSustainedNotes();
+                    break;
+                case cc::RpnMsb:
+                    rpnMsb_ = msg.data2;
+                    break;
+                case cc::RpnLsb:
+                    rpnLsb_ = msg.data2;
+                    break;
+                case cc::DataEntryMsb:
+                    // RPN 0 is pitch bend sensitivity, in semitones. Anything
+                    // else is not implemented and is deliberately ignored
+                    // rather than silently mapped onto something.
+                    if (rpnMsb_ == 0 && rpnLsb_ == 0 && msg.data2 > 0 && msg.data2 <= 48) {
+                        pitchBendRange_ = msg.data2;
+                    }
+                    break;
                 case cc::AllSoundOff:
+                    sustainDown_ = false;
+                    sustainedNote_ = false;
+                    pending_.active = false;
+                    lastAttackDelayMs_ = 0;
+                    currentValveMask_ = 0;
                     notes_.clear();
                     envelope_.reset();
                     break;
                 case cc::AllNotesOff:
+                    sustainDown_ = false;
+                    sustainedNote_ = false;
+                    pending_.active = false;
+                    lastAttackDelayMs_ = 0;
+                    currentValveMask_ = 0;
                     notes_.clear();
                     envelope_.noteOff();
                     break;
                 case cc::ResetControllers:
+                    sustainDown_ = false;
+                    releaseSustainedNotes();
                     ccModulation_ = 0;
                     ccBreath_ = 0;
                     ccVolume_ = 100;
@@ -208,14 +280,26 @@ void AudioEngine::handleMessage(const MidiMessage& msg) {
             channelPressure_ = msg.data1;
             break;
 
+        case MidiType::ProgramChange:
+            // Latched for the application, which owns the voicing library.
+            // Ignored entirely unless the user turned the option on.
+            if (cfg_.programChangeSelectsVoicing) {
+                programChange_ = static_cast<int8_t>(msg.data1 & 0x7F);
+            }
+            break;
+
         case MidiType::SystemReset:
+            sustainDown_ = false;
+            sustainedNote_ = false;
+            pending_.active = false;
+            currentValveMask_ = 0;
             notes_.clear();
             envelope_.reset();
             break;
 
         default:
-            // Program Change, SysEx and MPE are accepted by the router and
-            // simply ignored here until the corresponding feature exists.
+            // SysEx and MPE are accepted by the router and simply ignored
+            // here until the corresponding feature exists.
             break;
     }
 }
@@ -228,11 +312,13 @@ float AudioEngine::blowAmount() const {
     const float expr = static_cast<float>(ccExpression_) / 127.0f;
     const float pressure = static_cast<float>(channelPressure_) / 127.0f;
 
-    float blow = vel * cfg_.additive.velocityBrightness;
-    blow += breath * cfg_.additive.breathBrightness;
-    blow += (expr - 0.5f) * cfg_.additive.expressionBrightness;
-    blow += pressure * 0.25f;
-    const float weight = cfg_.additive.velocityBrightness + cfg_.additive.breathBrightness + 0.25f;
+    const float atWeight = voicing_.aftertouchToBrightness;
+    float blow = vel * voicing_.additive.velocityBrightness;
+    blow += breath * voicing_.additive.breathBrightness;
+    blow += (expr - 0.5f) * voicing_.additive.expressionBrightness;
+    blow += pressure * atWeight;
+    const float weight =
+        voicing_.additive.velocityBrightness + voicing_.additive.breathBrightness + atWeight;
     return clampValue(weight > 0.01f ? blow / weight : vel, 0.0f, 1.0f);
 }
 
@@ -245,11 +331,11 @@ void AudioEngine::updateControlRate() {
     }
 
     const float bendSemitones = (static_cast<float>(pitchBendRaw_) / 8192.0f) *
-                                static_cast<float>(cfg_.pitchBendRangeSemitones);
+                                static_cast<float>(pitchBendRange_);
 
     // ---- vibrato ----------------------------------------------------------
     float vibratoDepth = 0.0f;
-    switch (cfg_.vibrato.source) {
+    switch (voicing_.vibrato.source) {
         case VibratoSource::CC1:
             vibratoDepth = static_cast<float>(ccModulation_) / 127.0f;
             break;
@@ -273,7 +359,7 @@ void AudioEngine::updateControlRate() {
     vibratoPhaseGain_ = vibratoDepth * fade;
 
     const float vibrato = vibratoLfo_.next() * vibratoPhaseGain_ *
-                          (cfg_.vibrato.depthCents / 100.0f);
+                          (voicing_.vibrato.depthCents / 100.0f);
 
     const float pitch = currentPitch_ + bendSemitones + vibrato;
     const float frequency = noteToFrequency(pitch);
@@ -282,10 +368,14 @@ void AudioEngine::updateControlRate() {
     livePitch_ = pitch;
 
     // ---- timbre -----------------------------------------------------------
-    const float blow = blowAmount();
+    // The driver, the chamber and the cone are not flat. Correcting that with
+    // the master EQ wrecks the timbre, so the correction is a function of the
+    // note instead: a little level and a little brightness, interpolated.
+    registerCompensation(pitch, registerGain_, registerBrightness_);
+    const float blow = clampValue(blowAmount() + registerBrightness_, 0.0f, 1.0f);
     const float pitchNorm = clampValue((pitch - 40.0f) / 50.0f, 0.0f, 1.0f);
 
-    switch (cfg_.engine) {
+    switch (voicing_.engine) {
         case SynthEngineType::SINE:
             additive_.setFrequency(frequency);
             break;
@@ -299,6 +389,10 @@ void AudioEngine::updateControlRate() {
             additive_.setPitchNormalised(pitchNorm);
             wavetable_.setFrequency(frequency);
             wavetable_.setBrightness(blow);
+            break;
+        case SynthEngineType::BRASS_EXCITER:
+            exciter_.setFrequency(frequency);
+            exciter_.setBlow(blow);
             break;
         case SynthEngineType::ADDITIVE:
         default:
@@ -314,8 +408,20 @@ void AudioEngine::updateControlRate() {
     const float expr = static_cast<float>(ccExpression_) / 127.0f;
     // CC2 acts as a continuous air supply: when it is used it takes over from
     // the note velocity, which is what a breath controller player expects.
-    const float breathAmp = ccBreath_ > 0 ? static_cast<float>(ccBreath_) / 127.0f : 1.0f;
-    float amplitude = (0.25f + 0.75f * vel) * vol * expr * breathAmp;
+    const float breathRaw = ccBreath_ > 0 ? static_cast<float>(ccBreath_) / 127.0f : 1.0f;
+    const float pressure = static_cast<float>(channelPressure_) / 127.0f;
+
+    // Each contribution is weighted, so a builder can decide how much of the
+    // level a breath controller or an expression pedal really owns. The floor
+    // is what a velocity of 1 produces: at 0 the note is a note-off.
+    const float floor = clampValue(voicing_.velocityFloor, 0.0f, 1.0f);
+    const float velAmp = floor + (1.0f - floor) * vel;
+    const float breathAmp = 1.0f - voicing_.breathToVolume * (1.0f - breathRaw);
+    const float exprAmp = 1.0f - voicing_.expressionToVolume * (1.0f - expr);
+    const float atAmp = 1.0f + voicing_.aftertouchToVolume * pressure;
+
+    float amplitude = velAmp * vol * clampValue(exprAmp, 0.0f, 1.0f)
+                    * clampValue(breathAmp, 0.0f, 1.0f) * atAmp * registerGain_;
     smoothedAmplitude_ += (amplitude - smoothedAmplitude_) * 0.25f;
 }
 
@@ -355,13 +461,57 @@ void AudioEngine::schedulePendingArticulation(size_t frames) {
     }
     pending_.samples = 0;
     pending_.active = false;
-    startArticulation(pending_.fromSilence);
+    if (pending_.articulate) {
+        startArticulation(pending_.fromSilence);
+    } else if (portamentoCoef_ == 0.0f) {
+        // Slurred: no new attack, but the pitch was frozen until now and is
+        // released at the moment the pistons arrive.
+        currentPitch_ = targetPitch_;
+    }
+}
+
+// Sustain pedal released: if the key had already come up, the note ends now.
+void AudioEngine::releaseSustainedNotes() {
+    if (!sustainedNote_) return;
+    sustainedNote_ = false;
+    if (notes_.hasNote()) return;   // a key is still down, nothing to release
+    pending_.active = false;
+    lastAttackDelayMs_ = 0;
+    currentValveMask_ = 0;
+    envelope_.noteOff();
+}
+
+// Linear interpolation between the breakpoints. Below the first and above the
+// last the end values are held: extrapolating a correction curve is how a
+// register fix turns into a broken top octave.
+void AudioEngine::registerCompensation(float note, float& gainLinear, float& brightness) const {
+    const RegisterPoint* pts = voicing_.registerCurve;
+    if (note <= static_cast<float>(pts[0].note)) {
+        gainLinear = std::pow(10.0f, pts[0].gainDb / 20.0f);
+        brightness = pts[0].brightness;
+        return;
+    }
+    for (uint8_t i = 1; i < kRegisterPoints; ++i) {
+        if (note > static_cast<float>(pts[i].note)) continue;
+        const float lo = static_cast<float>(pts[i - 1].note);
+        const float hi = static_cast<float>(pts[i].note);
+        const float t = hi > lo ? (note - lo) / (hi - lo) : 0.0f;
+        const float db = pts[i - 1].gainDb + (pts[i].gainDb - pts[i - 1].gainDb) * t;
+        brightness = pts[i - 1].brightness + (pts[i].brightness - pts[i - 1].brightness) * t;
+        gainLinear = std::pow(10.0f, db / 20.0f);
+        return;
+    }
+    gainLinear = std::pow(10.0f, pts[kRegisterPoints - 1].gainDb / 20.0f);
+    brightness = pts[kRegisterPoints - 1].brightness;
 }
 
 void AudioEngine::renderBlock(float* out, size_t frames) {
     // Drain the MIDI queue at block boundaries: bounded work, no locking.
     MidiMessage msg;
     uint8_t guard = 0;
+    // A new voicing is picked up before the messages, so a preview and the
+    // notes that follow it in the same block agree about the sound.
+    takePendingVoicing();
     while (guard++ < 32 && queue_.pop(msg)) handleMessage(msg);
     schedulePendingArticulation(frames);
 
@@ -392,7 +542,7 @@ void AudioEngine::renderBlock(float* out, size_t frames) {
             }
         } else {
             const float env = envelope_.process();
-            switch (cfg_.engine) {
+            switch (voicing_.engine) {
                 case SynthEngineType::SINE:
                     // Configured with a single harmonic, so the additive
                     // generator IS the sine generator here.
@@ -404,9 +554,15 @@ void AudioEngine::renderBlock(float* out, size_t frames) {
                 case SynthEngineType::HYBRID: {
                     const float a = additive_.process();
                     const float w = wavetable_.process();
-                    s = a * 0.6f + w * 0.4f;
+                    const float m = clampValue(voicing_.hybridMix, 0.0f, 1.0f);
+                    s = a * m + w * (1.0f - m);
                     break;
                 }
+                case SynthEngineType::BRASS_EXCITER:
+                    // The exciter shapes the air noise itself, so it is handed
+                    // the noise sample instead of having it added afterwards.
+                    s = exciter_.process(noise_.next());
+                    break;
                 case SynthEngineType::ADDITIVE:
                 default:
                     s = additive_.process();
@@ -416,8 +572,8 @@ void AudioEngine::renderBlock(float* out, size_t frames) {
             // Breath floor plus the short chiff at the very beginning of a
             // note: two low level noise components, they cost one xorshift.
             const float n = noise_.next();
-            s += n * (cfg_.envelope.breathNoise * env +
-                      cfg_.envelope.attackNoise * envelope_.attackTransient());
+            s += n * (voicing_.envelope.breathNoise * env +
+                      voicing_.envelope.attackNoise * envelope_.attackTransient());
             s *= smoothedAmplitude_;
         }
 
@@ -427,7 +583,10 @@ void AudioEngine::renderBlock(float* out, size_t frames) {
         s *= acousticGainLinear_;
         s = dcBlocker_.process(s);
         dcBlocker_.observe(s);
-        s *= masterVolume_;
+        // Voicing trim, then master volume, then the limiter. The trim is
+        // deliberately upstream of the protection stage: it is a tone control,
+        // never a way past the ceiling.
+        s *= outputTrimLinear_ * masterVolume_;
         s = limiter_.process(s);
 
         if (muted_) s = 0.0f;
@@ -451,6 +610,10 @@ void AudioEngine::panic() {
     // queue as everything else; the audio task applies it on the next block,
     // at most a couple of milliseconds later.
     muted_ = true;
+    // Cleared here as well as by the queued message: if the queue were full
+    // the message would be dropped, and a note whose attack is still pending
+    // would speak after the panic. A bool store, and it fails towards silence.
+    pending_.active = false;
     MidiMessage m = MidiMessage::controlChange(1, cc::AllSoundOff, 0);
     queue_.push(m);
     testSignal_ = TestSignal::NONE;

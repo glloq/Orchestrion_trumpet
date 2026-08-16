@@ -59,6 +59,31 @@ void upgrade2to3(InstrumentConfiguration& cfg) {
     cfg.schemaVersion = 3;
 }
 
+// v3 -> v4
+//   * the sound moved out of AudioConfig into its own VoicingConfig, so it can
+//     be replaced live without going anywhere near the pins, the impedance or
+//     the protection stage.  The reader already maps a v3 `audio` block onto
+//     the new voicing, so nothing is lost.
+//   * the user EQ went from three bands to six.  A v3 file fills the first
+//     three; the rest start disabled at sensible frequencies.
+//   * the spectral tilts, the hybrid mix, the velocity floor and the
+//     aftertouch weights were literals in the DSP.  A migrated instrument gets
+//     exactly the values that used to be compiled in, so it sounds identical.
+void upgrade3to4(InstrumentConfiguration& cfg) {
+    const VoicingConfig defaults;
+    for (uint8_t i = 3; i < kMaxEqBands; ++i) {
+        if (cfg.voicing.eq[i].frequency <= 0.0f) cfg.voicing.eq[i] = defaults.eq[i];
+    }
+    if (cfg.voicing.name[0] == '\0') copyString(cfg.voicing.name, kNameLen, "Natural");
+    if (cfg.voicing.darkTilt <= 0.0f) cfg.voicing.darkTilt = 2.6f;
+    if (cfg.voicing.brightTilt <= 0.0f) cfg.voicing.brightTilt = 0.6f;
+    if (cfg.voicing.hybridMix <= 0.0f) cfg.voicing.hybridMix = 0.6f;
+    if (cfg.voicing.velocityFloor <= 0.0f) cfg.voicing.velocityFloor = 0.25f;
+    if (cfg.voicing.aftertouchToBrightness <= 0.0f) cfg.voicing.aftertouchToBrightness = 0.25f;
+    if (cfg.voicing.pitchBendRangeSemitones == 0) cfg.voicing.pitchBendRangeSemitones = 2;
+    cfg.schemaVersion = 4;
+}
+
 }  // namespace
 
 MigrationResult migrateConfig(InstrumentConfiguration& cfg) {
@@ -82,6 +107,9 @@ MigrationResult migrateConfig(InstrumentConfiguration& cfg) {
                 break;
             case 2:
                 upgrade2to3(cfg);
+                break;
+            case 3:
+                upgrade3to4(cfg);
                 break;
             default:
                 cfg.schemaVersion = kConfigSchemaVersion;

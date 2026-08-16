@@ -19,6 +19,13 @@ namespace ot {
 class AdditiveSynth {
 public:
     void configure(const AdditiveConfig& cfg, uint32_t sampleRate);
+    // Spectral tilt at blow = 0 and blow = 1. Higher means the partials fall
+    // away faster, so a bigger dark tilt is a rounder, more covered sound.
+    void setTilt(float darkTilt, float brightTilt) {
+        darkTilt_ = clampValue(darkTilt, 0.0f, 6.0f);
+        brightTilt_ = clampValue(brightTilt, 0.0f, 6.0f);
+        dirty_ = true;
+    }
 
     void setFrequency(float hz);
     // 0..1, how "hard" the instrument is being blown.  Recomputing the
@@ -52,6 +59,8 @@ private:
     uint32_t increment_[kMaxHarmonics] = {0};
     float gain_[kMaxHarmonics] = {0.0f};
     float normalisation_ = 1.0f;
+    float darkTilt_ = 2.6f;
+    float brightTilt_ = 0.6f;
     uint8_t active_ = 0;
     bool dirty_ = true;
 };

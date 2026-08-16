@@ -15,6 +15,7 @@
 #pragma once
 
 #include "audio/AdditiveSynth.h"
+#include "audio/BrassExciter.h"
 #include "audio/Envelope.h"
 #include "audio/Filters.h"
 #include "audio/IAudioEngine.h"
@@ -53,9 +54,24 @@ class AudioEngine final : public IAudioEngine, public IMidiSink {
 public:
     // `valves` is used for one thing only: knowing how long the pistons need
     // before the note is worth playing.  The engine never drives them.
-    void configure(const AudioConfig& audio, const SpeakerConfig& speaker,
-                   const AmplifierConfig& amplifier, const AcousticConfig& acoustic,
-                   const InstrumentConfig& instrument, const ValvesConfig& valves);
+    void configure(const AudioConfig& audio, const VoicingConfig& voicing,
+                   const SpeakerConfig& speaker, const AmplifierConfig& amplifier,
+                   const AcousticConfig& acoustic, const InstrumentConfig& instrument,
+                   const ValvesConfig& valves);
+
+    // ---- live voicing ------------------------------------------------------
+    // Called from the network task. The voicing is pushed into a lock-free
+    // slot and picked up at the start of the next audio block, so a slider in
+    // the browser is audible in about one block - and the network task never
+    // touches a DSP object.
+    //
+    // Only the voicing can be replaced this way. Impedance, power limits, the
+    // hard ceiling, the pins and the backend are not in this structure on
+    // purpose: they go through validation and a reboot.
+    void requestVoicing(const VoicingConfig& voicing);
+    // The voicing currently sounding, whatever its provenance.
+    const VoicingConfig& voicing() const { return voicing_; }
+    bool voicingPending() const { return voicingPending_; }
 
     bool begin() override;
     void renderBlock(float* out, size_t frames) override;
@@ -80,6 +96,16 @@ public:
     // Milliseconds the current note waited for the pistons; 0 when the note
     // started immediately.  Reported on the diagnostics page.
     uint16_t lastAttackDelayMs() const { return lastAttackDelayMs_; }
+    uint8_t pitchBendRange() const { return pitchBendRange_; }
+    bool sustainDown() const { return sustainDown_; }
+    // Set when a Program Change asked for a voicing; the application reads it
+    // and hands over the saved voicing, because the engine does not own the
+    // library.
+    int8_t takeProgramChange() {
+        const int8_t p = programChange_;
+        programChange_ = -1;
+        return p;
+    }
     // The engine keeps its own copy of the chart so it can tell which pistons
     // have to move for the next note.  Edits from the web UI are mirrored into
     // it, otherwise the delay would be computed from a stale table.
@@ -91,11 +117,19 @@ public:
 
 private:
     void handleMessage(const MidiMessage& msg);
+    void applyVoicing(const VoicingConfig& voicing);
+    void takePendingVoicing();
+    void releaseSustainedNotes();
+    // Level and brightness correction as a function of the note, interpolated
+    // between the breakpoints of the register curve.
+    void registerCompensation(float note, float& gainLinear, float& brightness) const;
     // Articulation, split out so it can be deferred until the pistons arrive.
     struct PendingArticulation {
         bool active = false;
+        bool articulate = false;   // false on a slur: only the pitch waits
         bool fromSilence = false;
         uint32_t samples = 0;      // remaining delay
+        float heldPitch = 60.0f;   // pitch to hold until the pistons land
     };
     void startArticulation(bool fromSilence);
     void schedulePendingArticulation(size_t frames);
@@ -106,6 +140,7 @@ private:
 
     // ---- configuration -----------------------------------------------------
     AudioConfig cfg_;
+    VoicingConfig voicing_;
     InstrumentConfig instrument_;
     SpeakerConfig speakerCfg_;
     SpeakerProfile speaker_;
@@ -120,6 +155,7 @@ private:
     Envelope envelope_;
     AdditiveSynth additive_;
     WavetableSynth wavetable_;
+    BrassExciter exciter_;
     NoiseSource noise_;
     Oscillator vibratoLfo_;
 
@@ -147,8 +183,21 @@ private:
     float peakLevel_ = 0.0f;
     float masterVolume_ = 0.75f;
     float acousticGainLinear_ = 1.0f;
+    float outputTrimLinear_ = 1.0f;
+    float registerGain_ = 1.0f;
+    float registerBrightness_ = 0.0f;
 
     // ---- controllers -------------------------------------------------------
+    // Sustain: CC64 holds the note after the key is released, exactly like a
+    // piano pedal. The note stack is not touched until the pedal comes up, so
+    // the valves stay down too - which is what a sequencer expects.
+    bool sustainDown_ = false;
+    bool sustainedNote_ = false;
+    // RPN 0 (pitch bend sensitivity). Parsed from CC101/100/6/38 so a
+    // sequencer that sets its own bend range is obeyed.
+    uint8_t rpnMsb_ = 0x7F;
+    uint8_t rpnLsb_ = 0x7F;
+    uint8_t pitchBendRange_ = 2;
     uint8_t ccModulation_ = 0;
     uint8_t ccBreath_ = 0;
     uint8_t ccVolume_ = 100;
@@ -158,6 +207,7 @@ private:
     uint8_t currentVelocity_ = 0;
 
     uint16_t lastAttackDelayMs_ = 0;
+    int8_t programChange_ = -1;
     bool muted_ = true;      // boots muted, unmuted at the end of the sequence
     bool started_ = false;
 
@@ -171,6 +221,12 @@ private:
     uint32_t testTotalSamples_ = 0;
 
     RingBuffer<MidiMessage, 64> queue_;
+
+    // Single-slot mailbox for the live voicing. A ring is pointless here: only
+    // the newest setting matters, and a slider produces far more updates than
+    // there are blocks.
+    VoicingConfig pendingVoicing_;
+    volatile bool voicingPending_ = false;
 };
 
 }  // namespace ot
