@@ -25,6 +25,10 @@ public:
 private:
     void registerRoutes();
 
+    // Serialises the whole configuration through a buffer borrowed from the
+    // heap for the length of the request.
+    void sendConfigJson(bool asAttachment);
+
     // --- handlers ---
     void handleStatus();
     void handleGetConfig();

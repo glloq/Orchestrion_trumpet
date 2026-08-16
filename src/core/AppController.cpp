@@ -125,6 +125,13 @@ bool AppController::startAudio() {
 
     audioEngine_.configure(cfg.audio, cfg.voicing, cfg.speaker, cfg.amplifier, cfg.acoustic,
                            cfg.instrument, cfg.valves);
+    {
+        // Starting the engine also resets what the control side considers the
+        // live sound, otherwise a commit right after a reconfiguration would
+        // save whatever had been previewed before it.
+        MutexLock lock(voicingMutex_);
+        desiredVoicing_ = cfg.voicing;
+    }
     audioEngine_.begin();
     audioEngine_.setMuted(true);
 
@@ -309,6 +316,10 @@ void AppController::midiTask() {
         ble_.poll();
         din_.poll();
         rtp_.poll();
+        // The browser keyboard is a transport like any other, and it is polled
+        // here for the same reason as the others: so that the router, the note
+        // stacks and the two engines only ever see one task.
+        web_.poll();
         // 1 ms cadence: well under the 320 us of a DIN byte burst thanks to
         // the UART FIFO, and far below anything a player could feel.
         vTaskDelay(pdMS_TO_TICKS(1));
@@ -402,7 +413,7 @@ void AppController::tick() {
     if (program >= 0) {
         const VoicingLibrary& lib = config_.config().voicings;
         if (program < static_cast<int8_t>(lib.count)) {
-            audioEngine_.requestVoicing(lib.items[program]);
+            requestVoicing(lib.items[program]);
             OT_LOGI("audio", "program %d -> voicing \"%s\"", program,
                     lib.items[program].name);
         }
@@ -447,6 +458,25 @@ void AppController::tick() {
         SystemState::instance().raiseFault(FaultCode::SOLENOID_THERMAL,
                                            "a valve driver reported a fault");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The live voicing
+// ---------------------------------------------------------------------------
+// Two producers - the network task and this one - so they are serialised
+// against each other. The audio task is not part of this: it reads the mailbox,
+// which is wait-free, and never takes the mutex.
+void AppController::requestVoicing(const VoicingConfig& voicing) {
+    {
+        MutexLock lock(voicingMutex_);
+        desiredVoicing_ = voicing;
+    }
+    audioEngine_.requestVoicing(voicing);
+}
+
+VoicingConfig AppController::desiredVoicing() const {
+    MutexLock lock(voicingMutex_);
+    return desiredVoicing_;
 }
 
 // ---------------------------------------------------------------------------

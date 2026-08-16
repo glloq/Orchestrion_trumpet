@@ -237,13 +237,13 @@ void ConfigValidator::validate(const InstrumentConfiguration& cfg, const BoardCa
                                                 ? model.stage1HalfAngleDeg
                                                 : model.stage2HalfAngleDeg));
         }
-        // The front cavity is a low pass on everything the bore receives.  A
-        // trumpet needs its harmonics well past 4 kHz to sound like one.
-        if (model.frontChamberCornerHz > 0.0f && model.frontChamberCornerHz < 4000.0f) {
+        // A front cavity resonating inside the playing range colours every
+        // note that passes through it, and no EQ undoes a resonance.
+        if (model.helmholtzResonanceHz > 0.0f && model.helmholtzResonanceHz < 4000.0f) {
             formatIssue(out, Severity::WARNING, "acoustic.frontChamberVolumeMl",
-                        "the front chamber starts loading the throat at %.0f Hz: reduce its "
-                        "volume or shorten the cone",
-                        static_cast<double>(model.frontChamberCornerHz));
+                        "the front chamber resonates at about %.0f Hz, inside the range the "
+                        "instrument plays: reduce its volume or shorten the cone",
+                        static_cast<double>(model.helmholtzResonanceHz));
         }
         if (model.highPassSource != AcousticSource::MEASURED) {
             formatIssue(out, Severity::INFO, "acoustic.measuredHighPassHz",

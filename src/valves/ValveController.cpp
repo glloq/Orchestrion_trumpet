@@ -211,6 +211,12 @@ void ValveController::onMidi(const MidiMessage& msg) {
 void ValveController::update() {
     if (!started_) return;
 
+    // Whatever the web asked for, applied here and nowhere else. Bounded so a
+    // burst of calibration slider moves cannot stretch one actuator cycle.
+    ValveCommand cmd;
+    uint8_t guard = 0;
+    while (guard++ < 8 && commands_.pop(cmd)) applyCommand(cmd);
+
     if (pulseMask_) {
         const uint32_t now = OT_MILLIS();
         for (uint8_t i = 0; i < cfg_.count; ++i) {
@@ -298,6 +304,65 @@ bool ValveController::calibrationPreview(uint8_t valve, uint16_t angle) {
         servo_.previewAngle(valve, angle);
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Commands posted from another task
+// ---------------------------------------------------------------------------
+bool ValveController::postMode(ValveMode mode) {
+    ValveCommand cmd;
+    cmd.type = ValveCommandType::MODE;
+    cmd.value = static_cast<uint16_t>(mode);
+    return commands_.push(cmd);
+}
+
+bool ValveController::postManual(uint8_t valve, bool pressed) {
+    // The same two conditions manualSet() checks. Reading cfg_.mode from
+    // another task is a single byte and it only ever changes when the user
+    // changes it; a command queued behind a mode change is still applied in
+    // order, so the worst case is a refusal the user will not see twice.
+    if (valve >= cfg_.count || cfg_.mode != ValveMode::MANUAL) return false;
+    ValveCommand cmd;
+    cmd.type = ValveCommandType::MANUAL;
+    cmd.valve = valve;
+    cmd.flag = pressed;
+    return commands_.push(cmd);
+}
+
+bool ValveController::postPulse(uint8_t valve, uint16_t durationMs) {
+    if (valve >= cfg_.count || stopped_ || !driverFor(valve)) return false;
+    ValveCommand cmd;
+    cmd.type = ValveCommandType::PULSE;
+    cmd.valve = valve;
+    cmd.value = durationMs;
+    return commands_.push(cmd);
+}
+
+bool ValveController::postCalibration(uint8_t valve, uint16_t angle) {
+    if (valve >= cfg_.count || stopped_) return false;
+    if (cfg_.items[valve].type != ValveActuatorType::SERVO) return false;
+    ValveCommand cmd;
+    cmd.type = ValveCommandType::CALIBRATE;
+    cmd.valve = valve;
+    cmd.value = angle;
+    return commands_.push(cmd);
+}
+
+void ValveController::applyCommand(const ValveCommand& cmd) {
+    switch (cmd.type) {
+        case ValveCommandType::MODE:
+            setMode(static_cast<ValveMode>(cmd.value));
+            break;
+        case ValveCommandType::MANUAL:
+            manualSet(cmd.valve, cmd.flag);
+            break;
+        case ValveCommandType::PULSE:
+            testPulse(cmd.valve, cmd.value);
+            break;
+        case ValveCommandType::CALIBRATE:
+            calibrationPreview(cmd.valve, cmd.value);
+            break;
+    }
 }
 
 ValveStatus ValveController::status(uint8_t valve) const {

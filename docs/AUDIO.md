@@ -369,12 +369,22 @@ of sound alone:
 |---|---|
 | Compression ratio | cone area / leadpipe area |
 | Cone half angles | `atan((r_in − r_out) / L)` per stage |
-| Front chamber corner | Helmholtz, first order: `(c/2π)·√(A/(V·L_eff))` |
+| Front chamber resonance | Helmholtz, first order: `(c/2π)·√(A/(V·L_eff))` |
 | Sealed resonance | `fs·√(1 + Vas/Vb)` — **only when fs and Vas are entered** |
 
 Everything is labelled with where it came from — `MEASURED`, `DERIVED` or
 `SPEAKER_PROFILE` — and the UI prints that label next to the number. **These
-are starting points for the bench, not measurements.** Entering a measured
+are starting points for the bench, not measurements.**
+
+The front chamber figure is a *resonance*, not a filter corner, and it is
+named that way in the code and in the UI. A single Helmholtz term says where a
+trapped volume starts fighting the cone; it says nothing about the shape of the
+response on either side of it, and it knows nothing about the trumpet the
+assembly is bolted to. Its only real job is to catch a geometry that resonates
+in the middle of the playing range — which is audible, and which no EQ undoes.
+The response that matters is the one measured with a sweep and a microphone
+through the whole chain, speaker + chamber + cone + trumpet; until that
+measurement exists, treat every number in this table as an order of magnitude. Entering a measured
 high pass makes it take over immediately; the model never overrides a
 measurement.
 

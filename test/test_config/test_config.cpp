@@ -128,6 +128,105 @@ void test_fingering_edits_survive_the_round_trip(void) {
     TEST_ASSERT_NULL(strstr(buffer, "\"fingering\""));
 }
 
+// A configuration file with everything the schema allows: four voicings with
+// their harmonics, EQ bands and register curves, every route, four valves and a
+// full fingering chart. The serialisation buffer is a fixed 8 kB and this is
+// the only thing that says whether it is big enough - a configuration that
+// cannot be written is a configuration that is silently lost.
+namespace {
+
+void fillToTheBrim(InstrumentConfiguration& cfg) {
+    ConfigManager::makeDefaults(cfg);
+    copyString(cfg.system.deviceName, kNameLen, "Orchestrion trumpet, bench number four");
+    copyString(cfg.wifi.ssid, sizeof(cfg.wifi.ssid), "a-rather-long-network-name-here");
+    copyString(cfg.midi.ble.deviceName, kNameLen, "GMB MIDI Trumpet, workshop unit");
+
+    VoicingConfig v = cfg.voicing;
+    v.additive.harmonicCount = kMaxHarmonics;
+    for (uint8_t h = 0; h < kMaxHarmonics; ++h) v.additive.harmonicGain[h] = 0.123456f + h * 0.01f;
+    for (uint8_t b = 0; b < kMaxEqBands; ++b) {
+        v.eq[b].frequency = 123.456f * (b + 1);
+        v.eq[b].gainDb = -4.25f + b;
+        v.eq[b].q = 0.707f + b * 0.1f;
+        v.eq[b].enabled = true;
+    }
+    for (uint8_t r = 0; r < kRegisterPoints; ++r) {
+        v.registerCurve[r].gainDb = -3.75f + r;
+        v.registerCurve[r].brightness = -0.5f + r * 0.25f;
+    }
+    v.outputTrimDb = -1.75f;
+    copyString(v.name, kNameLen, "Bright and brassy, take four");
+    cfg.voicing = v;
+
+    cfg.voicings.count = kMaxVoicings;
+    for (uint8_t i = 0; i < kMaxVoicings; ++i) {
+        cfg.voicings.items[i] = v;
+        copyString(cfg.voicings.items[i].name, kNameLen, "Voicing with a long enough name");
+    }
+
+    cfg.midi.routeCount = kMaxRoutes;
+    for (uint8_t i = 0; i < kMaxRoutes; ++i) {
+        MidiRoute& r = cfg.midi.routes[i];
+        r.source = MidiPort::USB;
+        r.destination = MidiPort::SOUND_ENGINE;
+        r.enabled = true;
+        r.channelMask = 0xAAAA;
+        r.transpose = -12;
+        r.velocityCurve = VelocityCurve::SOFT;
+        r.fixedVelocity = 111;
+        r.noteMin = 21;
+        r.noteMax = 108;
+    }
+
+    cfg.valves.count = kMaxValves;
+    for (uint8_t i = 0; i < kMaxValves; ++i) {
+        cfg.valves.items[i].type = i % 2 ? ValveActuatorType::SOLENOID : ValveActuatorType::SERVO;
+        cfg.valves.items[i].measuredSettleMs = 44 + i;
+    }
+
+    cfg.instrument.fingeringOverrideCount = kMaxFingeringOverrides;
+    for (uint8_t i = 0; i < kMaxFingeringOverrides; ++i) {
+        cfg.instrument.fingeringOverrides[i] = {static_cast<uint8_t>(40 + i), 0x05, 0x02};
+    }
+}
+
+}  // namespace
+
+void test_the_largest_configuration_still_fits(void) {
+    InstrumentConfiguration cfg;
+    fillToTheBrim(cfg);
+
+    // The same buffer ConfigManager::save() uses.
+    static char buffer[kConfigJsonCapacity];
+    const size_t length = serializeConfig(cfg, buffer, sizeof(buffer), SecretPolicy::INCLUDE);
+    TEST_ASSERT_TRUE_MESSAGE(length > 0, "the largest legal configuration did not serialise");
+    // save() refuses anything that reaches the end of the buffer, so the test
+    // has to clear that same bar - with room to spare for the next field.
+    TEST_ASSERT_TRUE_MESSAGE(length < sizeof(buffer) - 1024,
+                             "less than 1 kB of headroom left in the configuration buffer");
+
+    // And it must survive the round trip, not merely fit.
+    InstrumentConfiguration restored;
+    TEST_ASSERT_TRUE(deserializeConfig(buffer, length, restored));
+    TEST_ASSERT_EQUAL_UINT8(kMaxVoicings, restored.voicings.count);
+    TEST_ASSERT_EQUAL_UINT8(kMaxRoutes, restored.midi.routeCount);
+    TEST_ASSERT_EQUAL_UINT8(kMaxFingeringOverrides,
+                            restored.instrument.fingeringOverrideCount);
+    TEST_ASSERT_EQUAL_UINT8(kMaxHarmonics, restored.voicing.additive.harmonicCount);
+    TEST_ASSERT_TRUE(restored.voicing.eq[kMaxEqBands - 1].enabled);
+}
+
+// The redacted form is what the export file and the REST API carry, and it goes
+// through a buffer of the same size in the web server.
+void test_the_largest_configuration_fits_redacted(void) {
+    InstrumentConfiguration cfg;
+    fillToTheBrim(cfg);
+    static char buffer[kConfigJsonCapacity];
+    const size_t length = serializeConfig(cfg, buffer, sizeof(buffer), SecretPolicy::REDACT);
+    TEST_ASSERT_TRUE(length > 0);
+    TEST_ASSERT_TRUE(length < sizeof(buffer) - 1024);
+}
+
 void test_missing_fields_keep_their_default(void) {
     // A minimal document from an older or hand-written file.
     const char* json = "{\"schemaVersion\":2,\"audio\":{\"sampleRate\":32000}}";
@@ -660,6 +759,8 @@ int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_defaults_are_valid);
     RUN_TEST(test_round_trip_preserves_values);
+    RUN_TEST(test_the_largest_configuration_still_fits);
+    RUN_TEST(test_the_largest_configuration_fits_redacted);
     RUN_TEST(test_fingering_edits_survive_the_round_trip);
     RUN_TEST(test_missing_fields_keep_their_default);
     RUN_TEST(test_unknown_fields_are_ignored);

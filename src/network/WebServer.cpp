@@ -21,6 +21,11 @@ namespace ot {
 
 namespace {
 constexpr uint16_t kPort = 80;
+// Enough for every small response - status, diagnostics, the MIDI monitor.
+// The two big ones (the whole configuration, and the voicing library) borrow a
+// buffer from the heap for the length of the request instead: a permanent
+// 24 kB reservation for something that happens when a browser is open is 24 kB
+// the audio engine and the network stack do not get.
 constexpr size_t kJsonBuffer = 8192;
 
 #if !defined(OT_HOST_BUILD)
@@ -364,20 +369,30 @@ void HttpServerModule::handleDiagnostics() {
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
-void HttpServerModule::handleGetConfig() {
-    const size_t n = app_->configManager().exportJson(g_buffer, sizeof(g_buffer));
+// A full instrument serialises to nearly 16 kB; the shared buffer is 8 kB and
+// deliberately stays that way. Borrowed, used, given back.
+void HttpServerModule::sendConfigJson(bool asAttachment) {
+    char* big = static_cast<char*>(malloc(kConfigJsonCapacity));
+    if (!big) {
+        sendError(503, "not enough memory to serialise the configuration");
+        return;
+    }
+    const size_t n = app_->configManager().exportJson(big, kConfigJsonCapacity);
     if (n == 0) {
+        free(big);
         sendError(500, "could not serialise the configuration");
         return;
     }
-    sendJson(200, g_buffer, n);
+    if (asAttachment) {
+        g_http->sendHeader("Content-Disposition", "attachment; filename=\"trumpet-config.json\"");
+    }
+    sendJson(200, big, n);
+    free(big);
 }
 
-void HttpServerModule::handleExport() {
-    const size_t n = app_->configManager().exportJson(g_buffer, sizeof(g_buffer));
-    g_http->sendHeader("Content-Disposition", "attachment; filename=\"trumpet-config.json\"");
-    sendJson(200, g_buffer, n);
-}
+void HttpServerModule::handleGetConfig() { sendConfigJson(false); }
+
+void HttpServerModule::handleExport() { sendConfigJson(true); }
 
 void HttpServerModule::handlePutConfig() {
     const String& body = g_http->arg("plain");
@@ -646,7 +661,7 @@ void HttpServerModule::handleValveTest() {
     deserializeJson(doc, g_http->arg("plain"));
     const uint8_t valve = doc["valve"] | 0;
     const uint16_t duration = doc["durationMs"] | 300;
-    if (!app_->valves().testPulse(valve, duration)) {
+    if (!app_->valves().postPulse(valve, duration)) {
         sendError(400, "no driver is bound to this valve");
         return;
     }
@@ -662,7 +677,7 @@ void HttpServerModule::handleValveMode() {
         sendError(400, "expected AUTO, MANUAL, MIDI_CC or DISABLED");
         return;
     }
-    app_->valves().setMode(parsed);
+    app_->valves().postMode(parsed);
     sendOk();
 }
 
@@ -671,7 +686,7 @@ void HttpServerModule::handleValveManual() {
     deserializeJson(doc, g_http->arg("plain"));
     const uint8_t valve = doc["valve"] | 0;
     const bool pressed = doc["pressed"] | false;
-    if (!app_->valves().manualSet(valve, pressed)) {
+    if (!app_->valves().postManual(valve, pressed)) {
         sendError(409, "the valve engine is not in MANUAL mode");
         return;
     }
@@ -687,7 +702,7 @@ void HttpServerModule::handleValveCalibrate() {
         sendError(400, "the angle must stay within 0..180 degrees");
         return;
     }
-    if (!app_->valves().calibrationPreview(valve, angle)) {
+    if (!app_->valves().postCalibration(valve, angle)) {
         sendError(400, "this valve is not a servo");
         return;
     }
@@ -927,14 +942,16 @@ void HttpServerModule::handleAudioPreview() {
         sendError(400, "expected a voicing object");
         return;
     }
-    // Start from the voicing that is sounding, so a partial body is a patch
-    // rather than a reset to the factory sound.
-    VoicingConfig next = app_->audio().voicing();
+    // Start from the voicing the user last asked for, so a partial body is a
+    // patch rather than a reset to the factory sound. Deliberately not the
+    // engine's copy: the previous preview may not have reached a block yet,
+    // and patching a stale base would undo the slider that was just moved.
+    VoicingConfig next = app_->desiredVoicing();
     readVoicing(doc.as<JsonObjectConst>(), next);
     // The guard on the live path: whatever the browser sent, the DSP only ever
     // sees values it can run.
     ConfigValidator::sanitiseVoicing(next);
-    app_->audio().requestVoicing(next);
+    app_->requestVoicing(next);
 
     JsonDocument out;
     out["ok"] = true;
@@ -946,13 +963,15 @@ void HttpServerModule::handleAudioPreview() {
 }
 
 void HttpServerModule::handleAudioRevert() {
-    app_->audio().requestVoicing(app_->configManager().config().voicing);
+    app_->requestVoicing(app_->configManager().config().voicing);
     sendOk();
 }
 
 void HttpServerModule::handleAudioCommit() {
     InstrumentConfiguration next = app_->configManager().config();
-    next.voicing = app_->audio().voicing();
+    // What the user asked for, not what the DSP happens to have adopted: a
+    // commit issued in the same breath as a preview must save that preview.
+    next.voicing = app_->desiredVoicing();
     ValidationReport report;
     if (!app_->configManager().applyAndSave(next, report)) {
         sendError(422, "the configuration was refused");
@@ -963,17 +982,25 @@ void HttpServerModule::handleAudioCommit() {
 
 void HttpServerModule::handleVoicings() {
     const InstrumentConfiguration& cfg = app_->configManager().config();
+    // Five voicings with their harmonics, EQ and register curves: too big for
+    // the shared buffer, same borrow-and-return as the configuration.
+    char* big = static_cast<char*>(malloc(kConfigJsonCapacity));
+    if (!big) {
+        sendError(503, "not enough memory to list the voicings");
+        return;
+    }
     JsonDocument doc;
     doc["ok"] = true;
     doc["capacity"] = kMaxVoicings;
-    writeVoicing(doc["live"].to<JsonObject>(), app_->audio().voicing());
+    writeVoicing(doc["live"].to<JsonObject>(), app_->desiredVoicing());
     writeVoicing(doc["saved"].to<JsonObject>(), cfg.voicing);
     JsonArray items = doc["items"].to<JsonArray>();
     for (uint8_t i = 0; i < cfg.voicings.count && i < kMaxVoicings; ++i) {
         writeVoicing(items.add<JsonObject>(), cfg.voicings.items[i]);
     }
-    const size_t n = serializeJson(doc, g_buffer, sizeof(g_buffer));
-    sendJson(200, g_buffer, n);
+    const size_t n = serializeJson(doc, big, kConfigJsonCapacity);
+    sendJson(200, big, n);
+    free(big);
 }
 
 // Stores the voicing that is currently sounding under a name.  Saving over an
@@ -987,7 +1014,7 @@ void HttpServerModule::handleVoicingSave() {
         return;
     }
     InstrumentConfiguration next = app_->configManager().config();
-    VoicingConfig entry = app_->audio().voicing();
+    VoicingConfig entry = app_->desiredVoicing();
     copyString(entry.name, sizeof(entry.name), name);
 
     int8_t slot = -1;
@@ -1012,7 +1039,7 @@ void HttpServerModule::handleVoicingSave() {
         sendError(422, "the configuration was refused");
         return;
     }
-    app_->audio().requestVoicing(entry);
+    app_->requestVoicing(entry);   // the name is part of the sound now
     sendOk();
 }
 
@@ -1025,7 +1052,7 @@ void HttpServerModule::handleVoicingLoad() {
         if (!strEqualsI(cfg.voicings.items[i].name, name)) continue;
         // Loaded live, not saved: auditioning a stored voicing must not
         // overwrite the one that boots.
-        app_->audio().requestVoicing(cfg.voicings.items[i]);
+        app_->requestVoicing(cfg.voicings.items[i]);
         sendOk();
         return;
     }
@@ -1212,6 +1239,7 @@ void HttpServerModule::handleOtaFinished() {
 
 void HttpServerModule::registerRoutes() {}
 bool HttpServerModule::serveStatic(const char*) { return false; }
+void HttpServerModule::sendConfigJson(bool) {}
 void HttpServerModule::handleStatus() {}
 void HttpServerModule::handleGetConfig() {}
 void HttpServerModule::handlePutConfig() {}

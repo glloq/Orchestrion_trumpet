@@ -14,6 +14,14 @@
 
 namespace ot {
 
+// The buffer every serialisation goes through: ConfigManager::save(), the
+// export file and the REST API all use one of this size. A configuration that
+// does not fit is refused rather than truncated, so the size is pinned by
+// test_the_largest_configuration_still_fits - four full voicings, every route,
+// four valves and a complete fingering chart.
+static constexpr size_t kConfigJsonCapacity = 24576;
+
+
 // Wi-Fi passwords are stored on the device but must never leave it: anyone who
 // can reach the hotspot could otherwise read the credentials of the user's home
 // network from /api/config or an exported file.  The on-disk store is the only

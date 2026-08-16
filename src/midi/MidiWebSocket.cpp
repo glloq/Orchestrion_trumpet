@@ -19,7 +19,20 @@ void MidiWebSocketTransport::injectFromWeb(const MidiMessage& msg) {
     MidiMessage m = msg;
     m.source = MidiPort::WEB;
     if (m.timestampMs == 0) m.timestampMs = OT_MILLIS();
-    deliver(m);
+    // Queue only - the delivery happens on the MIDI task, in poll().
+    incoming_.push(m);
+}
+
+void MidiWebSocketTransport::poll() {
+    if (!started_) return;
+    MidiMessage m;
+    // Bounded like the DIN reader: a browser holding the keyboard down must
+    // never be able to starve the other transports.
+    uint8_t guard = 0;
+    while (guard++ < 32 && incoming_.pop(m)) {
+        if (!cfg_.inEnabled) continue;   // switched off while queued
+        deliver(m);
+    }
 }
 
 void MidiWebSocketTransport::onMidi(const MidiMessage& msg) {

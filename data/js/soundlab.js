@@ -39,10 +39,11 @@ const SoundLab = (() => {
   const LEVELS = ['Quick Tune', 'Voicing', 'Expert'];
   let level = 'Quick Tune';
 
-  // A and B are complete voicings. `slot` says which one is sounding.
+  // A and B are complete, independent sounds: each one carries its own voicing
+  // AND its own macro positions. Sharing one set of macro positions between
+  // them meant that moving any macro after switching slot re-applied A's macro
+  // positions to B's sound - the comparison compared the same thing twice.
   const ab = { A: null, B: null, slot: 'A' };
-  // Macro positions, 0..1. Derived, never stored on the device.
-  let macros = null;
   let saved = null;         // the voicing the instrument would boot with
   let library = [];
   let pushTimer = null;
@@ -50,7 +51,12 @@ const SoundLab = (() => {
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   const lerp = (a, b, t) => a + (b - a) * t;
   const clone = (o) => JSON.parse(JSON.stringify(o));
-  const live = () => ab[ab.slot];
+  const live = () => ab[ab.slot].voicing;
+  const liveMacros = () => ab[ab.slot].macros;
+  // Every preview is numbered. A reply that is not the newest is discarded:
+  // switching slot while a request is in flight used to write A's answer into
+  // B, which quietly made the two sounds converge.
+  let previewSeq = 0;
 
   // =========================================================================
   // Macros
@@ -151,11 +157,16 @@ const SoundLab = (() => {
     if (pushTimer) clearTimeout(pushTimer);
     const send = async () => {
       pushTimer = null;
+      // Captured before the await: by the time the answer arrives the user may
+      // be on the other slot, and the answer belongs to the slot that asked.
+      const slot = ab.slot;
+      const seq = ++previewSeq;
       try {
-        const r = await API.audioPreview(live());
+        const r = await API.audioPreview(ab[slot].voicing);
+        if (seq !== previewSeq) return;          // a newer preview won
         // The firmware echoes what it actually applied, so a clamped value is
         // shown clamped instead of the UI pretending otherwise.
-        if (r && r.voicing) ab[ab.slot] = r.voicing;
+        if (r && r.voicing) ab[slot].voicing = r.voicing;
         markDirty();
       } catch (err) { UI.toast(err.message, 'bad'); }
     };
@@ -177,9 +188,8 @@ const SoundLab = (() => {
     if (!ab.A) {
       const cfg = App.config();
       saved = clone(cfg.voicing);
-      ab.A = clone(cfg.voicing);
-      ab.B = clone(cfg.voicing);
-      macros = defaultMacros();
+      ab.A = { voicing: clone(cfg.voicing), macros: defaultMacros() };
+      ab.B = { voicing: clone(cfg.voicing), macros: defaultMacros() };
     }
     try {
       const r = await API.voicings();
@@ -240,14 +250,14 @@ const SoundLab = (() => {
         UI.el('button', { class: 'btn', text: 'Revert to saved', onclick: async () => {
           try {
             await API.audioRevert();
-            ab[ab.slot] = clone(saved);
+            ab[ab.slot].voicing = clone(saved);
             UI.toast('Back to the stored sound', 'ok');
             App.render();
           } catch (err) { UI.toast(err.message, 'bad'); }
         } }),
         UI.el('button', { class: 'btn', text: 'Reset to factory voicing', onclick: () => {
-          ab[ab.slot] = MOCK.defaultVoicing();
-          macros = defaultMacros();
+          ab[ab.slot].voicing = MOCK.defaultVoicing();
+          ab[ab.slot].macros = defaultMacros();
           push(true);
           App.render();
         } })
@@ -271,7 +281,11 @@ const SoundLab = (() => {
         onclick: async () => {
           try {
             await API.voicingLoad(item.name);
-            ab[ab.slot] = clone(item);
+            ab[ab.slot].voicing = clone(item);
+            // The macros describe a journey from the factory sound; a loaded
+            // preset is a different starting point, so they go back to neutral
+            // rather than claiming to describe a sound they did not shape.
+            ab[ab.slot].macros = defaultMacros();
             UI.toast('“' + item.name + '” loaded into ' + ab.slot, 'ok');
             App.render();
           } catch (err) { UI.toast(err.message, 'bad'); }
@@ -311,9 +325,10 @@ const SoundLab = (() => {
 
     for (const macro of MACROS) {
       const row = UI.el('div', { class: 'field' }, [
-        UI.slider(macro.label, Math.round(macros[macro.key] * 100), 0, 100, 1, (x) => {
-          macros[macro.key] = x / 100;
-          ab[ab.slot] = applyMacros(baseFor(), macros);
+        UI.slider(macro.label, Math.round(liveMacros()[macro.key] * 100), 0, 100, 1, (x) => {
+          const slot = ab.slot;
+          ab[slot].macros[macro.key] = x / 100;
+          ab[slot].voicing = applyMacros(baseFor(), ab[slot].macros);
           push();
           const s = document.getElementById('sl-macro-summary');
           if (s) refreshSummary(s);
@@ -565,7 +580,7 @@ const SoundLab = (() => {
     wrap.appendChild(UI.el('div', { class: 'btn-row' }, [
       UI.el('button', { class: 'btn small', text: 'Apply this JSON', onclick: () => {
         try {
-          ab[ab.slot] = MOCK.sanitiseVoicing(JSON.parse(area.value));
+          ab[ab.slot].voicing = MOCK.sanitiseVoicing(JSON.parse(area.value));
           push(true);
           App.render();
         } catch (err) { UI.toast('Not a valid voicing: ' + err.message, 'bad'); }
@@ -620,5 +635,5 @@ const SoundLab = (() => {
     ]);
   }
 
-  return { render, macros: () => macros };
+  return { render, macros: () => (ab[ab.slot] ? ab[ab.slot].macros : null) };
 })();

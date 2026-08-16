@@ -45,6 +45,9 @@ void AudioEngine::configure(const AudioConfig& audio, const VoicingConfig& voici
         portamentoCoef_ = 0.0f;
     }
 
+    // Boot path, on the application task: build the tables outright. From here
+    // on they are only ever rebuilt by requestVoicing(), off the audio task.
+    wavetable_.configure(voicing.additive, sampleRate_, voicing.darkTilt, voicing.brightTilt);
     applyVoicing(voicing);
 }
 
@@ -59,7 +62,14 @@ void AudioEngine::applyVoicing(const VoicingConfig& voicing) {
     if (voicing_.engine == SynthEngineType::SINE) additiveCfg.harmonicCount = 1;
     additive_.configure(additiveCfg, sampleRate_);
     additive_.setTilt(voicing_.darkTilt, voicing_.brightTilt);
-    wavetable_.configure(voicing_.additive, sampleRate_);
+    // The wavetable is NOT rebuilt here: this runs on the audio task at a block
+    // boundary and a rebuild is a hundred thousand sin() calls. prepareVoicing()
+    // has already done the work on the calling task; all that is left is to
+    // take it, which is one compare-and-swap.
+    if (!wavetable_.adopt() && !wavetable_.matches(voicing_.additive, sampleRate_,
+                                                   voicing_.darkTilt, voicing_.brightTilt)) {
+        ++wavetableMisses_;
+    }
     exciter_.configure(voicing_.exciter, sampleRate_);
 
     // The LFO is advanced once per control block, not once per sample, so it
@@ -83,17 +93,36 @@ void AudioEngine::applyVoicing(const VoicingConfig& voicing) {
     rebuildFilters();
 }
 
+// Called from the network task (a preview) or the application task (a Program
+// Change).  Those two are serialised by AppController; the audio task is not
+// involved and never waits.
+//
+// Everything expensive about a voicing change happens right here, on the
+// caller's task, before the audio task is told anything: the mailbox only ever
+// carries a value that is ready to be used.
 void AudioEngine::requestVoicing(const VoicingConfig& voicing) {
-    pendingVoicing_ = voicing;
-    voicingPending_ = true;
+    if (!wavetable_.matches(voicing.additive, sampleRate_, voicing.darkTilt,
+                            voicing.brightTilt)) {
+        // Fails only while a previous build is still waiting to be taken, which
+        // lasts at most one audio block. Retrying costs this task a couple of
+        // milliseconds and costs the audio task nothing.
+        for (uint8_t attempt = 0; attempt < 16; ++attempt) {
+            if (wavetable_.prepare(voicing.additive, sampleRate_, voicing.darkTilt,
+                                   voicing.brightTilt)) {
+                break;
+            }
+            sleepMs(2);
+        }
+    }
+    voicingMailbox_.publish(voicing);
 }
 
 void AudioEngine::takePendingVoicing() {
-    if (!voicingPending_) return;
-    voicingPending_ = false;
+    VoicingConfig next;
+    if (!voicingMailbox_.take(next)) return;
     // The envelope is deliberately left alone: moving a slider must not
     // retrigger the note being auditioned, or a live preview is useless.
-    applyVoicing(pendingVoicing_);
+    applyVoicing(next);
 }
 
 void AudioEngine::rebuildFilters() {
@@ -324,7 +353,15 @@ float AudioEngine::blowAmount() const {
 
 void AudioEngine::updateControlRate() {
     // ---- pitch ------------------------------------------------------------
-    if (portamentoCoef_ > 0.0f) {
+    if (pending_.active) {
+        // The pistons are still moving. Whatever the articulation settings say,
+        // the pitch stays where it was: gliding - or jumping - to the new note
+        // now would play it through the bore of the old fingering, which is the
+        // exact defect the synchronisation exists to prevent. Freezing here and
+        // not only at the Note On matters because this runs every 32 samples
+        // and would otherwise undo the freeze on the very next control tick.
+        currentPitch_ = pending_.heldPitch;
+    } else if (portamentoCoef_ > 0.0f) {
         currentPitch_ = targetPitch_ + (currentPitch_ - targetPitch_) * portamentoCoef_;
     } else {
         currentPitch_ = targetPitch_;
@@ -428,9 +465,14 @@ void AudioEngine::updateControlRate() {
 void AudioEngine::startArticulation(bool fromSilence) {
     currentPitch_ = (fromSilence || portamentoCoef_ == 0.0f) ? targetPitch_ : currentPitch_;
     envelope_.noteOn(fromSilence || instrument_.retrigger);
+    // The exciter models the air column being blown: its pressure has to rise
+    // again at every attack, or `transientMs` describes the first note of the
+    // session and nothing after it.
+    exciter_.noteOn();
     if (fromSilence || instrument_.retrigger) {
         additive_.resetPhase();
         wavetable_.resetPhase();
+        exciter_.resetPhase();
     }
     noteAgeSamples_ = 0;
 }

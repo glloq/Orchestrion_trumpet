@@ -545,7 +545,7 @@ const Settings = (() => {
         ['Cone half angles', model.stage1HalfAngleDeg.toFixed(0) + '° / '
                              + model.stage2HalfAngleDeg.toFixed(0) + '°'],
         ['Path length', Math.round(model.totalPathLengthMm) + ' mm'],
-        ['Front chamber corner', Math.round(model.frontChamberCornerHz) + ' Hz'],
+        ['Front chamber resonance', Math.round(model.helmholtzResonanceHz) + ' Hz'],
         ['Sealed resonance', model.sealedResonanceKnown
             ? Math.round(model.sealedResonanceHz) + ' Hz'
             : 'unknown — enter the driver fs and Vas'],
@@ -553,7 +553,9 @@ const Settings = (() => {
                                + (SOURCE[model.highPassSource] || model.highPassSource)]
       ]));
       wrap.appendChild(UI.el('p', { class: 'help',
-        text: 'These follow from the dimensions above and from the speed of sound. They are '
+        text: 'The front chamber figure is a resonance, not a filter corner: it says where '
+            + 'the trapped volume starts fighting the cone, nothing about the shape of the '
+            + 'response around it. These follow from the dimensions above and from the speed of sound. They are '
             + 'starting points for the bench, not measurements: enter the measured high pass '
             + 'once you have swept the assembly and it takes over.' }));
     }
@@ -626,13 +628,23 @@ const Settings = (() => {
     ])));
   }
 
-  // Mirrors valveSettleMs() in src/valves/ValveTiming.cpp.
+  // Mirrors valveSettleMs() in src/valves/ValveTiming.cpp — including the
+  // acceleration: over a short throw a servo never reaches its top speed, and
+  // travel/speed under-estimates the movement by a factor of three.
   function settleEstimateMs(item) {
     if (item.measuredSettleMs > 0) return item.measuredSettleMs;
     if (item.type === 'SERVO') {
       if (!item.speed) return 400;
-      return Math.min(400, Math.round(Math.abs(item.pressedAngle - item.releasedAngle)
-                                      * 1000 / item.speed) + 12);
+      const travel = Math.abs(item.pressedAngle - item.releasedAngle);
+      let ms;
+      if (!item.acceleration) {
+        ms = travel * 1000 / item.speed;
+      } else if (travel <= (item.speed * item.speed) / item.acceleration) {
+        ms = 2000 * Math.sqrt(travel / item.acceleration);          // triangular
+      } else {
+        ms = travel * 1000 / item.speed + item.speed * 1000 / item.acceleration;
+      }
+      return Math.min(400, Math.round(ms) + 12);
     }
     if (item.type === 'SOLENOID') return Math.min(400, item.pullInMs + 12);
     return 0;

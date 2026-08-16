@@ -331,8 +331,46 @@ void test_solenoid_cooldown_then_recovery(void) {
     safety.update(1000);
     TEST_ASSERT_EQUAL_UINT8(0, safety.dutyPercent());
 
-    // Once it expires and the note is still held, one fresh pull-in is allowed.
+    // The note is STILL held, which on a real instrument means it is stuck.
+    // The coil stays off: cycling 5 s on / 3 s off for ever is not a recovery.
     safety.update(1700);
+    TEST_ASSERT_EQUAL_UINT8(0, safety.dutyPercent());
+    TEST_ASSERT_TRUE(safety.latched());
+    for (uint32_t t = 2000; t <= 30000; t += 500) safety.update(t);
+    TEST_ASSERT_EQUAL_UINT8(0, safety.dutyPercent());
+
+    // Releasing the note clears it, and the next note plays normally.
+    safety.request(false, 30500);
+    TEST_ASSERT_FALSE(safety.latched());
+    TEST_ASSERT_EQUAL(SolenoidFault::NONE, safety.fault());
+    safety.request(true, 31000);
+    TEST_ASSERT_EQUAL_UINT8(100, safety.dutyPercent());
+}
+
+// The thermal ceiling is a different story: the coil is warm, not stuck, and
+// resting it is exactly the right answer.
+void test_solenoid_over_duty_recovers_on_its_own(void) {
+    ValveConfig cfg;
+    cfg.pullInPwm = 100;
+    cfg.pullInMs = 10;
+    cfg.holdPwm = 40;
+    cfg.maxOnMs = 100000;      // keep the on-time guard out of this
+    cfg.cooldownMs = 500;
+    cfg.maxDutyPercent = 30;
+
+    SolenoidSafety safety;
+    safety.configure(cfg);
+    safety.request(true, 0);
+    uint32_t t = 0;
+    for (; t <= 20000; t += 50) {
+        safety.update(t);
+        if (safety.fault() == SolenoidFault::OVER_DUTY) break;
+    }
+    TEST_ASSERT_EQUAL(SolenoidFault::OVER_DUTY, safety.fault());
+    TEST_ASSERT_FALSE(safety.latched());
+
+    // Once rested, the note that is still held is allowed to play again.
+    safety.update(t + 600);
     TEST_ASSERT_EQUAL_UINT8(100, safety.dutyPercent());
 }
 
@@ -720,6 +758,43 @@ void test_controller_sustained_fingering_survives_a_test_pulse(void) {
     TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
 }
 
+// The web layer runs on the network task. It posts; the actuator task applies.
+// Nothing outside that task may write a driver register.
+void test_controller_web_commands_go_through_the_queue(void) {
+    ValveController controller;
+    ValvesConfig cfg = mixedConfig();
+    cfg.mode = ValveMode::MANUAL;
+    controller.begin(cfg, writtenPitch());
+
+    // Accepted, and NOT applied yet: the valve moves when the actuator task
+    // next runs, not inside the HTTP handler.
+    TEST_ASSERT_TRUE(controller.postManual(1, true));
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+    controller.update();
+    TEST_ASSERT_TRUE(controller.status(1).pressed);
+
+    // Commands are applied in the order they were posted.
+    TEST_ASSERT_TRUE(controller.postManual(0, true));
+    TEST_ASSERT_TRUE(controller.postManual(1, false));
+    controller.update();
+    TEST_ASSERT_TRUE(controller.status(0).pressed);
+    TEST_ASSERT_FALSE(controller.status(1).pressed);
+
+    // A command that cannot work is refused straight away, so the browser gets
+    // a truthful answer instead of a silent no-op.
+    TEST_ASSERT_FALSE(controller.postManual(9, true));
+    TEST_ASSERT_FALSE(controller.postPulse(9, 100));
+    TEST_ASSERT_FALSE(controller.postCalibration(2, 90));   // valve 3 is a solenoid
+
+    // A mode change is queued like everything else, and what follows it obeys
+    // the new mode.
+    TEST_ASSERT_TRUE(controller.postMode(ValveMode::AUTO));
+    controller.update();
+    TEST_ASSERT_EQUAL(ValveMode::AUTO, controller.mode());
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+    TEST_ASSERT_FALSE(controller.postManual(0, true));   // no longer MANUAL
+}
+
 void test_controller_ignores_valves_it_does_not_have(void) {
     ValveController controller;
     ValvesConfig cfg = mixedConfig();
@@ -758,14 +833,34 @@ void test_settle_time_follows_the_servo_travel(void) {
     v.releasedAngle = 40;
     v.pressedAngle = 88;
     v.speedDegPerSec = 900;
-    // 48 deg at 900 deg/s is 53 ms, plus the mechanical margin.
-    TEST_ASSERT_UINT16_WITHIN(4, 65, valveSettleMs(v));
+    v.accelDegPerSec2 = 6000;
+    // 48 deg at 900 deg/s and 6000 deg/s^2 never reaches the top speed at all:
+    // it is a triangular profile, 2*sqrt(48/6000) = 179 ms, plus the margin.
+    // Dividing the travel by the top speed would say 53 ms and the note would
+    // speak through the previous fingering for two thirds of the movement.
+    TEST_ASSERT_UINT16_WITHIN(4, 190, valveSettleMs(v));
 
     v.speedDegPerSec = 300;     // a slow hobby servo
-    TEST_ASSERT_UINT16_WITHIN(4, 172, valveSettleMs(v));
+    TEST_ASSERT_UINT16_WITHIN(4, 222, valveSettleMs(v));
 
     v.measuredSettleMs = 41;    // a bench figure always wins
     TEST_ASSERT_EQUAL_UINT16(41, valveSettleMs(v));
+}
+
+// The profile itself, independently of any valve.
+void test_servo_travel_time_uses_the_acceleration(void) {
+    // Short throw: acceleration bound, triangular. 2*sqrt(48/6000) s.
+    TEST_ASSERT_UINT16_WITHIN(3, 179, servoTravelMs(48, 900, 6000));
+    // Long throw: there is room to cruise, so it is travel/speed + speed/accel.
+    // 300 deg at 900 deg/s + 900/6000 s = 333 + 150.
+    TEST_ASSERT_UINT16_WITHIN(3, 483, servoTravelMs(300, 900, 6000));
+    // The boundary between the two, dist = v^2/a = 135 deg, must agree from
+    // both sides: 2*sqrt(135/6000) = 300 ms and 135/900 + 900/6000 = 300 ms.
+    TEST_ASSERT_UINT16_WITHIN(4, 300, servoTravelMs(135, 900, 6000));
+    // No acceleration limit configured: the servo is assumed to start at full
+    // speed, which is the old model and the right one in that case.
+    TEST_ASSERT_UINT16_WITHIN(2, 53, servoTravelMs(48, 900, 0));
+    TEST_ASSERT_EQUAL_UINT32(0, servoTravelMs(0, 900, 6000));
 }
 
 void test_settle_time_of_a_solenoid_is_its_pull_in(void) {
@@ -787,14 +882,16 @@ void test_attack_delay_waits_for_the_slowest_moving_valve(void) {
         valves.items[i].releasedAngle = 40;
         valves.items[i].pressedAngle = 88;
         valves.items[i].speedDegPerSec = 900;
+        valves.items[i].accelDegPerSec2 = 6000;
     }
     valves.items[2].speedDegPerSec = 200;   // valve 3 is the slow one
+    valves.sync.maxDelayMs = 500;           // the ceiling is tested separately
 
     // Only valve 1 moves: the fast time applies.
-    TEST_ASSERT_UINT16_WITHIN(5, 65, noteAttackDelayMs(valves, 0b000, 0b001));
+    TEST_ASSERT_UINT16_WITHIN(5, 190, noteAttackDelayMs(valves, 0b000, 0b001));
     // Valve 3 moves as well: the note waits for it, and for it alone - the
     // valves move together, so the delays do not add up.
-    TEST_ASSERT_UINT16_WITHIN(6, 120, noteAttackDelayMs(valves, 0b000, 0b101));
+    TEST_ASSERT_UINT16_WITHIN(6, 285, noteAttackDelayMs(valves, 0b000, 0b101));
     // Same fingering: nothing has to move, so nothing waits.
     TEST_ASSERT_EQUAL_UINT16(0, noteAttackDelayMs(valves, 0b101, 0b101));
 }
@@ -846,6 +943,7 @@ int main(int, char**) {
     RUN_TEST(test_solenoid_pull_in_then_hold);
     RUN_TEST(test_solenoid_releases_on_a_stuck_note);
     RUN_TEST(test_solenoid_cooldown_then_recovery);
+    RUN_TEST(test_solenoid_over_duty_recovers_on_its_own);
     RUN_TEST(test_solenoid_duty_cycle_limit);
     RUN_TEST(test_solenoid_release_clears_the_drive_immediately);
     RUN_TEST(test_solenoid_hold_level_is_not_counted_as_full_duty);
@@ -862,9 +960,11 @@ int main(int, char**) {
     RUN_TEST(test_controller_sustain_yields_to_a_new_note);
     RUN_TEST(test_controller_sustain_never_survives_a_panic_message);
     RUN_TEST(test_controller_sustained_fingering_survives_a_test_pulse);
+    RUN_TEST(test_controller_web_commands_go_through_the_queue);
     RUN_TEST(test_controller_ignores_valves_it_does_not_have);
     RUN_TEST(test_mock_actuator_contract);
     RUN_TEST(test_settle_time_follows_the_servo_travel);
+    RUN_TEST(test_servo_travel_time_uses_the_acceleration);
     RUN_TEST(test_settle_time_of_a_solenoid_is_its_pull_in);
     RUN_TEST(test_attack_delay_waits_for_the_slowest_moving_valve);
     RUN_TEST(test_attack_delay_respects_the_policy);

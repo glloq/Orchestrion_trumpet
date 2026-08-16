@@ -16,6 +16,7 @@
 #if defined(OT_HOST_BUILD)
 
 #include <algorithm>
+#include <mutex>
 #include <string>
 
 // Minimal stand-ins used by the host build.  The clock is driven by hand so a
@@ -37,6 +38,8 @@ inline void hostAdvanceMillis(uint32_t ms) { hostMillisRef() += ms; }
 #else  // ---------------------------------------------------------- firmware
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #define OT_MILLIS() millis()
 #define OT_MICROS() micros()
 
@@ -62,6 +65,74 @@ inline bool strEqualsI(const char* a, const char* b) {
     }
     return *a == *b;
 }
+
+// Integer square root.  Used by the solenoid thermal integral and by the servo
+// travel-time estimate, neither of which wants <cmath> pulled into a task that
+// must stay predictable.
+inline uint32_t isqrt32(uint32_t value) {
+    uint32_t result = 0;
+    uint32_t bit = 1u << 30;
+    while (bit > value) bit >>= 2;
+    while (bit != 0) {
+        if (value >= result + bit) {
+            value -= result + bit;
+            result = (result >> 1) + bit;
+        } else {
+            result >>= 1;
+        }
+        bit >>= 2;
+    }
+    return result;
+}
+
+// Hands the CPU over for a moment. Only ever called from a control task that
+// is waiting for the audio task to pick something up; the host build has no
+// tasks, so there is nothing to wait for.
+#if defined(OT_HOST_BUILD)
+inline void sleepMs(uint32_t) {}
+#else
+inline void sleepMs(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms ? ms : 1)); }
+#endif
+
+// Mutual exclusion between two *non real-time* producers - the network task and
+// the application task both publishing a voicing, for instance.  It must never
+// appear on the audio path: the whole point of the lock-free mailboxes is that
+// the audio task never waits for anyone.
+#if defined(OT_HOST_BUILD)
+class Mutex {
+public:
+    void lock() { m_.lock(); }
+    void unlock() { m_.unlock(); }
+
+private:
+    std::mutex m_;
+};
+#else
+class Mutex {
+public:
+    Mutex() : handle_(xSemaphoreCreateMutex()) {}
+    void lock() {
+        if (handle_) xSemaphoreTake(handle_, portMAX_DELAY);
+    }
+    void unlock() {
+        if (handle_) xSemaphoreGive(handle_);
+    }
+
+private:
+    SemaphoreHandle_t handle_;
+};
+#endif
+
+class MutexLock {
+public:
+    explicit MutexLock(Mutex& m) : m_(m) { m_.lock(); }
+    ~MutexLock() { m_.unlock(); }
+    MutexLock(const MutexLock&) = delete;
+    MutexLock& operator=(const MutexLock&) = delete;
+
+private:
+    Mutex& m_;
+};
 
 inline void copyString(char* dst, size_t dstSize, const char* src) {
     if (!dst || dstSize == 0) return;

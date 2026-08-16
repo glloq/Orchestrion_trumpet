@@ -369,7 +369,10 @@ struct ValveSyncConfig {
     // trim the result without editing every valve.
     int16_t trimMs = 0;
     // Nothing is ever delayed by more than this, whatever the arithmetic says.
-    uint16_t maxDelayMs = 120;
+    // A 48 degree throw at the default 900 deg/s and 6000 deg/s^2 already needs
+    // ~190 ms, so a ceiling below that would silently discard the estimate the
+    // synchronisation is built on.
+    uint16_t maxDelayMs = 250;
 };
 
 struct ValvesConfig {

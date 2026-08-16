@@ -23,6 +23,7 @@
 #include "audio/Oscillator.h"
 #include "audio/Profiles.h"
 #include "audio/WavetableSynth.h"
+#include "core/LatestValue.h"
 #include "core/RingBuffer.h"
 #include "midi/IMidiTransport.h"
 #include "midi/NoteStack.h"
@@ -71,7 +72,10 @@ public:
     void requestVoicing(const VoicingConfig& voicing);
     // The voicing currently sounding, whatever its provenance.
     const VoicingConfig& voicing() const { return voicing_; }
-    bool voicingPending() const { return voicingPending_; }
+    bool voicingPending() const { return voicingMailbox_.pending(); }
+    // Voicings adopted with a wavetable that had not finished rebuilding. Zero
+    // in practice; shown on the diagnostics page rather than assumed.
+    uint32_t wavetableMisses() const { return wavetableMisses_; }
 
     bool begin() override;
     void renderBlock(float* out, size_t frames) override;
@@ -222,11 +226,13 @@ private:
 
     RingBuffer<MidiMessage, 64> queue_;
 
-    // Single-slot mailbox for the live voicing. A ring is pointless here: only
-    // the newest setting matters, and a slider produces far more updates than
-    // there are blocks.
-    VoicingConfig pendingVoicing_;
-    volatile bool voicingPending_ = false;
+    // Mailbox for the live voicing. A ring is pointless here - only the newest
+    // setting matters, and a slider produces far more updates than there are
+    // blocks - but a plain struct plus a flag is worse than pointless: copying
+    // a VoicingConfig is not atomic and the audio task would eventually read
+    // half of one sound and half of another. See core/LatestValue.h.
+    LatestValue<VoicingConfig> voicingMailbox_;
+    uint32_t wavetableMisses_ = 0;
 };
 
 }  // namespace ot
