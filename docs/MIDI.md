@@ -157,7 +157,7 @@ behind the trumpet stops too.
 | CC 120 — All Sound Off | Immediate silence, notes cleared, valves released. |
 | CC 121 — Reset Controllers | Controllers back to their defaults. |
 | CC 123 — All Notes Off | Notes released, valves released. |
-| Real-time (clock, start, stop, …) | Parsed and routed; the engines ignore them. |
+| Real-time (clock, start, stop, …) | Parsed and routed; the engines ignore them — except System Reset, which both treat as All Sound Off. |
 | SysEx | Parsed and routed; the sound engine ignores them. The parser has a 256 byte SysEx buffer and counts what it had to drop. USB-MIDI splits SysEx across 4-byte packets: those payload bytes are handed to the same parser the DIN port uses (code index numbers 0x4–0x7), so reassembly, the buffer cap and the overflow counter are shared rather than duplicated. |
 | MPE | Not implemented. The architecture is extensible — per-note pitch would require a polyphonic voice allocator — but nothing pretends to support it today. |
 

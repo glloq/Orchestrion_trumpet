@@ -813,8 +813,19 @@ const MOCK = (() => {
         return Promise.resolve({ ok: true, rebootRequired: true });
 
       case 'GET /api/fingering': return Promise.resolve(fingering());
-      case 'PUT /api/fingering':
-        return Promise.resolve({ ok: true, applied: (parsed.notes || []).length, persisted: false });
+      case 'PUT /api/fingering': {
+        // Same accounting as the firmware: only what differs from the standard
+        // chart is stored, and there is room for a bounded number of edits.
+        const chart = fingering().notes;
+        const standard = {};
+        chart.forEach((r) => { standard[r.written] = r.primary + ':' + r.alternate; });
+        const edits = (parsed.notes || []).filter(
+          (r) => standard[r.written] !== undefined &&
+                 standard[r.written] !== r.primary + ':' + r.alternate);
+        return Promise.resolve({ ok: true, applied: (parsed.notes || []).length,
+                                 persisted: true, stored: Math.min(edits.length, 48),
+                                 truncated: edits.length > 48 });
+      }
       case 'POST /api/fingering/reset': return Promise.resolve({ ok: true });
 
       case 'POST /api/panic':

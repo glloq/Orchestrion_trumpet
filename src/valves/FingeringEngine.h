@@ -39,6 +39,13 @@ public:
     bool setFingering(uint8_t writtenNote, uint8_t primaryMask, uint8_t alternateMask);
     void resetToDefault();
 
+    // The chart minus the standard chart, so the configuration file carries the
+    // user's edits and nothing else. Returns the number written, which is
+    // capped at kMaxFingeringOverrides — see `overflowed`.
+    uint8_t collectOverrides(FingeringOverride* out, uint8_t max, bool* overflowed = nullptr) const;
+    // Standard chart, then the stored edits on top.
+    void applyOverrides(const FingeringOverride* items, uint8_t count);
+
     static uint8_t defaultPrimary(int writtenNote);
     static uint8_t defaultAlternate(int writtenNote);
     // True when the written pitch is inside the practical trumpet range.

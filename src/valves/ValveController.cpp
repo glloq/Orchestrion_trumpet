@@ -13,6 +13,8 @@ bool ValveController::begin(const ValvesConfig& valves, const InstrumentConfig& 
     currentMask_ = 0;
     manualMask_ = 0;
     ccMask_ = 0;
+    sustainDown_ = false;
+    sustainedMask_ = 0;
     pulseMask_ = 0;
     stopped_ = false;
 
@@ -76,6 +78,8 @@ void ValveController::setMode(ValveMode mode) {
     cfg_.mode = mode;
     manualMask_ = 0;
     ccMask_ = 0;
+    sustainDown_ = false;
+    sustainedMask_ = 0;
     if (mode == ValveMode::OFF) {
         releaseAll();
     } else {
@@ -86,7 +90,8 @@ void ValveController::setMode(ValveMode mode) {
 uint8_t ValveController::desiredMask() const {
     switch (cfg_.mode) {
         case ValveMode::AUTO:
-            return notes_.hasNote() ? maskForNote(notes_.activeNote()) : 0;
+            if (notes_.hasNote()) return maskForNote(notes_.activeNote());
+            return sustainedMask_;   // 0 unless the pedal is holding a note
         case ValveMode::MANUAL:
             return manualMask_;
         case ValveMode::MIDI_CC:
@@ -125,18 +130,44 @@ void ValveController::applyMask(uint8_t mask) {
 void ValveController::onMidi(const MidiMessage& msg) {
     if (!started_ || cfg_.mode == ValveMode::OFF) return;
 
+    if (msg.type == MidiType::SystemReset) {
+        notes_.clear();
+        ccMask_ = 0;
+        sustainDown_ = false;
+        sustainedMask_ = 0;
+        applyMask(0);
+        return;
+    }
+
     if (msg.type == MidiType::ControlChange) {
         switch (msg.data1) {
             case cc::AllNotesOff:
             case cc::AllSoundOff:
                 notes_.clear();
                 ccMask_ = 0;
+                sustainDown_ = false;
+                sustainedMask_ = 0;
                 applyMask(0);
                 return;
             case cc::ResetControllers:
                 ccMask_ = 0;
+                sustainDown_ = false;
+                sustainedMask_ = 0;
                 if (cfg_.mode == ValveMode::MIDI_CC) applyMask(0);
+                else if (cfg_.mode == ValveMode::AUTO && !notes_.hasNote()) applyMask(0);
                 return;
+            case cc::Sustain:
+                // Down: the fingering under the fingers becomes the one the
+                // pedal will hold. Up: whatever the pedal was holding is
+                // released, unless a key is still down.
+                sustainDown_ = msg.data2 >= 64;
+                if (!sustainDown_ && sustainedMask_) {
+                    sustainedMask_ = 0;
+                    if (cfg_.mode == ValveMode::AUTO && !notes_.hasNote()) applyMask(0);
+                }
+                // No `return`: a valve may legitimately be mapped to CC 64 in
+                // MIDI_CC mode, and that mapping still has to run.
+                break;
             default:
                 break;
         }
@@ -165,7 +196,13 @@ void ValveController::onMidi(const MidiMessage& msg) {
     }
 
     if (notes_.hasNote()) {
+        sustainedMask_ = 0;
         applyMask(maskForNote(notes_.activeNote()));
+    } else if (sustainDown_) {
+        // The key came up but the note has not: hold the fingering it was
+        // sounding through, exactly as the sound engine holds the note.
+        sustainedMask_ = currentMask_ & ~pulseMask_;
+        applyMask(sustainedMask_);
     } else {
         applyMask(0);
     }
@@ -202,6 +239,8 @@ void ValveController::releaseAll() {
     notes_.clear();
     manualMask_ = 0;
     ccMask_ = 0;
+    sustainDown_ = false;
+    sustainedMask_ = 0;
     pulseMask_ = 0;
     currentMask_ = 0;
     servo_.releaseAll();

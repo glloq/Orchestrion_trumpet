@@ -83,9 +83,13 @@ and **Reset to default** restores the chart above.
 
 ![Fingering table](../img/screenshots/configure-fingering.png)
 
-> The table lives in RAM and is rebuilt from the defaults at every boot. The
-> API response carries `"persisted": false` and the UI repeats it; persisting
-> user edits is a schema v3 item.
+Saving writes the edits into the configuration file and the chart is rebuilt
+from the standard table plus those edits at every boot. Only the notes that
+*differ* are stored — a file repeating all 128 notes would fossilise the
+standard chart, typos included — and there is room for
+`kMaxFingeringOverrides` (48) of them. The response says how many were stored
+and whether any had to be dropped; the UI shows that rather than claiming a
+save that did not fit.
 
 ### Transposition
 
@@ -283,6 +287,25 @@ The 12 ms margin covers linkage slop and stiction and is a guess; that is what
 the figure** — the estimate ignores load entirely.
 
 ![Attack synchronisation](../img/screenshots/settings-valve-sync.png)
+
+## Sustain
+
+The two engines share a note stack and a fingering table, and they must never
+disagree about the note being played. That includes CC 64: when the pedal holds
+a note whose key has come up, the sound engine keeps it speaking, so the valve
+engine holds the same fingering down until the pedal is released.
+
+```
+pedal down, key down     the fingering of the note, as usual
+pedal down, key up       that fingering is held
+pedal down, new note     the new note wins, and becomes what the pedal holds
+pedal up                 released, unless a key is still down
+All Notes Off / panic    released, and the pedal is no longer considered down
+```
+
+A valve mapped to CC 64 in `MIDI_CC` mode still follows it as a plain
+controller — the pedal only holds a fingering in `AUTO`, where there is a note
+to hold.
 
 ## PANIC
 

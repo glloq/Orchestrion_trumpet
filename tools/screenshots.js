@@ -25,7 +25,9 @@ const fs = require('fs');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUT = path.join(ROOT, 'img', 'screenshots');
-const URL = 'file://' + path.join(ROOT, 'data', 'index.html');
+// SCREENSHOT_URL points the run at a served copy of data/ instead; the
+// default needs no server at all.
+const URL = process.env.SCREENSHOT_URL || ('file://' + path.join(ROOT, 'data', 'index.html'));
 const WIDTH = 1360;
 const SCALE = 1.5;   // crisp text without enormous PNGs
 
@@ -41,9 +43,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     deviceScaleFactor: SCALE,
     colorScheme: 'light'
   });
+  // Under file:// every /api/* fetch is blocked by CORS, and that failure is
+  // exactly what makes the UI fall back to its mock. Those two messages are
+  // the expected path, not a defect; anything else is reported.
+  const expected = /Access to fetch at 'file:.*api\/|Failed to load resource: net::ERR_FAILED/;
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+  page.on('console', (m) => {
+    if (m.type() !== 'error') return;
+    if (expected.test(m.text())) return;
+    errors.push('console: ' + m.text());
+  });
 
   await page.goto(URL);
   await page.waitForSelector('.nav-item');

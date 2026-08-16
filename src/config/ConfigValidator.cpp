@@ -434,6 +434,35 @@ void ConfigValidator::validate(const InstrumentConfiguration& cfg, const BoardCa
                     "no route reaches the sound or valve engine: the instrument stays silent");
     }
 
+    // The two engines share a note stack and a fingering table precisely so
+    // that they can never disagree about the note being played. A routing
+    // table can still break that from outside, by handing them different
+    // notes: the pistons then hold one fingering while the synthesis plays
+    // another, and the bore is wrong for every note.
+    for (uint8_t i = 0; i < cfg.midi.routeCount && i < kMaxRoutes; ++i) {
+        const MidiRoute& a = cfg.midi.routes[i];
+        if (!a.enabled || a.destination != MidiPort::SOUND_ENGINE) continue;
+        bool paired = false;
+        for (uint8_t j = 0; j < cfg.midi.routeCount && j < kMaxRoutes; ++j) {
+            const MidiRoute& b = cfg.midi.routes[j];
+            if (!b.enabled || b.destination != MidiPort::VALVE_ENGINE) continue;
+            if (b.source != a.source) continue;
+            paired = true;
+            if (b.transpose != a.transpose || b.noteMin != a.noteMin ||
+                b.noteMax != a.noteMax || b.channelMask != a.channelMask) {
+                formatIssue(out, Severity::WARNING, "midi.routes",
+                            "%s reaches the two engines through different filters: "
+                            "the pistons and the sound will not agree on the note",
+                            ot::toString(a.source));
+            }
+        }
+        if (!paired) {
+            formatIssue(out, Severity::WARNING, "midi.routes",
+                        "%s plays the sound engine but not the pistons",
+                        ot::toString(a.source));
+        }
+    }
+
     // ----------------------------------------------------------- instrument
     if (cfg.instrument.noteMin > cfg.instrument.noteMax) {
         formatIssue(out, Severity::ERROR, "instrument.range",

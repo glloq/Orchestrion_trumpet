@@ -123,6 +123,61 @@ void test_fingering_table_can_be_edited_and_reset(void) {
     TEST_ASSERT_EQUAL_UINT8(0, engine.primary(60));
 }
 
+// An edited chart has to survive a reboot, and only the edits may be stored:
+// writing all 128 notes out would fossilise the standard chart in the file.
+void test_fingering_overrides_are_only_the_differences(void) {
+    InstrumentConfig cfg;
+    FingeringEngine engine;
+    engine.configure(cfg);
+
+    FingeringOverride items[kMaxFingeringOverrides];
+    bool overflowed = true;
+    TEST_ASSERT_EQUAL_UINT8(0, engine.collectOverrides(items, kMaxFingeringOverrides, &overflowed));
+    TEST_ASSERT_FALSE(overflowed);
+
+    engine.setFingering(60, V1 | V3, V2);
+    engine.setFingering(72, kNoFingering, kNoFingering);
+    const uint8_t n = engine.collectOverrides(items, kMaxFingeringOverrides, &overflowed);
+    TEST_ASSERT_EQUAL_UINT8(2, n);
+    TEST_ASSERT_FALSE(overflowed);
+    TEST_ASSERT_EQUAL_UINT8(60, items[0].written);
+    TEST_ASSERT_EQUAL_UINT8(V1 | V3, items[0].primary);
+    TEST_ASSERT_EQUAL_UINT8(V2, items[0].alternate);
+    TEST_ASSERT_EQUAL_UINT8(kNoFingeringMask, items[1].primary);
+
+    // Reboot: the standard chart, then the stored edits on top of it.
+    cfg.fingeringOverrideCount = n;
+    for (uint8_t i = 0; i < n; ++i) cfg.fingeringOverrides[i] = items[i];
+    FingeringEngine afterBoot;
+    afterBoot.configure(cfg);
+    TEST_ASSERT_EQUAL_UINT8(V1 | V3, afterBoot.primary(60));
+    TEST_ASSERT_EQUAL_UINT8(V2, afterBoot.alternate(60));
+    TEST_ASSERT_EQUAL_UINT8(kNoFingering, afterBoot.primary(72));
+    // Everything else is still the factory chart.
+    TEST_ASSERT_EQUAL_UINT8(FingeringEngine::defaultPrimary(64), afterBoot.primary(64));
+}
+
+void test_fingering_overrides_report_an_overflow(void) {
+    InstrumentConfig cfg;
+    FingeringEngine engine;
+    engine.configure(cfg);
+
+    // More edited notes than the configuration can carry.
+    uint8_t edited = 0;
+    for (int n = 40; n <= 96 && edited < kMaxFingeringOverrides + 3; ++n) {
+        const uint8_t want = static_cast<uint8_t>(FingeringEngine::defaultPrimary(n) ^ V3);
+        if (want & 0xF0) continue;
+        engine.setFingering(static_cast<uint8_t>(n), want, kNoFingering);
+        ++edited;
+    }
+
+    FingeringOverride items[kMaxFingeringOverrides];
+    bool overflowed = false;
+    const uint8_t n = engine.collectOverrides(items, kMaxFingeringOverrides, &overflowed);
+    TEST_ASSERT_EQUAL_UINT8(kMaxFingeringOverrides, n);
+    TEST_ASSERT_TRUE(overflowed);
+}
+
 // ---------------------------------------------------------------------------
 // Servo motion
 // ---------------------------------------------------------------------------
@@ -580,6 +635,91 @@ void test_test_pulse_restores_the_played_state(void) {
     TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
 }
 
+// CC 64. The sound engine keeps a sustained note speaking; if the pistons come
+// straight back up, that note finishes through the open bore — the two engines
+// must agree about the current note, always.
+void test_controller_sustain_holds_the_fingering(void) {
+    ValveController controller;
+    controller.begin(mixedConfig(), writtenPitch());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 127));
+    // Written C#4 is 1-2-3.
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+
+    // The key comes up; the pedal is down, so the pistons stay where they are.
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.desiredMask());
+
+    // Releasing the pedal releases them.
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 0));
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+}
+
+void test_controller_sustain_yields_to_a_new_note(void) {
+    ValveController controller;
+    controller.begin(mixedConfig(), writtenPitch());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 127));
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));    // 1-2-3
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+
+    // A new note wins over what the pedal is holding: written E4 is 1-2.
+    controller.onMidi(MidiMessage::noteOn(1, 64, 100));
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+
+    // Its own key comes up, and now *that* fingering is what the pedal holds.
+    controller.onMidi(MidiMessage::noteOff(1, 64));
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+
+    // A key still down outlives the pedal.
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 0));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+}
+
+void test_controller_sustain_never_survives_a_panic_message(void) {
+    ValveController controller;
+    controller.begin(mixedConfig(), writtenPitch());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 127));
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::AllNotesOff, 0));
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+
+    // And the pedal must not still be considered down afterwards.
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+}
+
+// A test pulse used to be cleaned up against `desiredMask()`, which answered 0
+// while the pedal was holding a note: pulsing any valve lifted the sustained
+// fingering for good.
+void test_controller_sustained_fingering_survives_a_test_pulse(void) {
+    ValveController controller;
+    controller.begin(mixedConfig(), writtenPitch());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 127));
+    controller.onMidi(MidiMessage::noteOn(1, 64, 100));    // 1-2
+    controller.onMidi(MidiMessage::noteOff(1, 64));
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+
+    hostSetMillis(4000);
+    TEST_ASSERT_TRUE(controller.testPulse(2, 200));
+    hostSetMillis(4300);
+    controller.update();
+    TEST_ASSERT_FALSE(controller.status(2).pressed);
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+}
+
 void test_controller_ignores_valves_it_does_not_have(void) {
     ValveController controller;
     ValvesConfig cfg = mixedConfig();
@@ -697,6 +837,8 @@ int main(int, char**) {
     RUN_TEST(test_fingering_bb_transposition_written);
     RUN_TEST(test_fingering_other_instruments);
     RUN_TEST(test_fingering_table_can_be_edited_and_reset);
+    RUN_TEST(test_fingering_overrides_are_only_the_differences);
+    RUN_TEST(test_fingering_overrides_report_an_overflow);
     RUN_TEST(test_servo_reaches_the_target_and_never_overshoots);
     RUN_TEST(test_servo_speed_is_limited);
     RUN_TEST(test_servo_detaches_after_the_movement);
@@ -716,6 +858,10 @@ int main(int, char**) {
     RUN_TEST(test_controller_panic_parks_everything);
     RUN_TEST(test_controller_modes);
     RUN_TEST(test_test_pulse_restores_the_played_state);
+    RUN_TEST(test_controller_sustain_holds_the_fingering);
+    RUN_TEST(test_controller_sustain_yields_to_a_new_note);
+    RUN_TEST(test_controller_sustain_never_survives_a_panic_message);
+    RUN_TEST(test_controller_sustained_fingering_survives_a_test_pulse);
     RUN_TEST(test_controller_ignores_valves_it_does_not_have);
     RUN_TEST(test_mock_actuator_contract);
     RUN_TEST(test_settle_time_follows_the_servo_travel);

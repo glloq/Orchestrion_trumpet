@@ -359,6 +359,19 @@ void configToJson(const InstrumentConfiguration& cfg, JsonObject root, SecretPol
     inst["portamentoMs"] = cfg.instrument.portamentoMs;
     inst["noteMin"] = cfg.instrument.noteMin;
     inst["noteMax"] = cfg.instrument.noteMax;
+    if (cfg.instrument.fingeringOverrideCount) {
+        // Only the notes fingered differently from the standard chart. -1 is
+        // "no fingering", which is not the same as the open position.
+        JsonArray chart = inst["fingering"].to<JsonArray>();
+        for (uint8_t i = 0; i < cfg.instrument.fingeringOverrideCount &&
+                            i < kMaxFingeringOverrides; ++i) {
+            const FingeringOverride& f = cfg.instrument.fingeringOverrides[i];
+            JsonObject o = chart.add<JsonObject>();
+            o["n"] = f.written;
+            o["p"] = f.primary == kNoFingeringMask ? -1 : static_cast<int>(f.primary);
+            o["a"] = f.alternate == kNoFingeringMask ? -1 : static_cast<int>(f.alternate);
+        }
+    }
 
     JsonObject midi = root["midi"].to<JsonObject>();
     JsonObject usb = midi["usb"].to<JsonObject>();
@@ -561,6 +574,22 @@ bool configFromJson(JsonObjectConst root, InstrumentConfiguration& cfg) {
     readNumber(inst["portamentoMs"], cfg.instrument.portamentoMs);
     readNumber(inst["noteMin"], cfg.instrument.noteMin);
     readNumber(inst["noteMax"], cfg.instrument.noteMax);
+    if (inst["fingering"].is<JsonArrayConst>()) {
+        cfg.instrument.fingeringOverrideCount = 0;
+        for (JsonObjectConst o : inst["fingering"].as<JsonArrayConst>()) {
+            if (cfg.instrument.fingeringOverrideCount >= kMaxFingeringOverrides) break;
+            const int n = o["n"] | -1;
+            if (n < 0 || n > 127) continue;
+            const int p = o["p"] | -1;
+            const int a = o["a"] | -1;
+            if (p > 0x0F || a > 0x0F) continue;   // four valves, four bits
+            FingeringOverride& f =
+                cfg.instrument.fingeringOverrides[cfg.instrument.fingeringOverrideCount++];
+            f.written = static_cast<uint8_t>(n);
+            f.primary = p < 0 ? kNoFingeringMask : static_cast<uint8_t>(p);
+            f.alternate = a < 0 ? kNoFingeringMask : static_cast<uint8_t>(a);
+        }
+    }
 
     JsonObjectConst midi = root["midi"];
     readBool(midi["usb"]["in"], cfg.midi.usb.inEnabled);
