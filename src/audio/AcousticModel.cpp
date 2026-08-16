@@ -55,13 +55,13 @@ AcousticModel computeAcousticModel(const AcousticConfig& cfg, const SpeakerConfi
     //
     // A is the narrowest section, Leff the physical path plus one flanged end
     // correction (0.85 * radius).  This is an estimate of where the front
-    // cavity starts fighting back, not a filter response.
+    // cavity resonates, not a filter response and not a measurement.
     const float volumeM3 = cfg.frontChamberVolumeMl * 1.0e-6f;
     const float areaM2 = m.throatAreaMm2 * 1.0e-6f;
     const float endCorrectionMm = 0.85f * cfg.leadpipeDiameterMm * 0.5f;
     const float lengthM = (m.totalPathLengthMm + endCorrectionMm) * 1.0e-3f;
     if (volumeM3 > 0.0f && areaM2 > 0.0f && lengthM > 0.0f) {
-        m.frontChamberCornerHz =
+        m.helmholtzResonanceHz =
             (kSpeedOfSound / (2.0f * kPi)) * std::sqrt(areaM2 / (volumeM3 * lengthM));
     }
 

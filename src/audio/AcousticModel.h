@@ -54,11 +54,14 @@ struct AcousticModel {
     float stage2HalfAngleDeg = 0.0f;
     float totalPathLengthMm = 0.0f;
 
-    // ---- derived corners --------------------------------------------------
-    // Upper corner imposed by the trapped front volume working against the
-    // mass of air in the cone assembly (Helmholtz, first order).  Everything
-    // above this is fighting the front chamber rather than reaching the bore.
-    float frontChamberCornerHz = 0.0f;
+    // ---- derived resonances -----------------------------------------------
+    // Helmholtz resonance of the trapped front volume working against the mass
+    // of air in the cone assembly, to first order.  It is a RESONANCE, not a
+    // filter corner: the response neither starts nor stops there.  What it is
+    // good for is spotting a geometry whose front cavity resonates in the
+    // middle of the instrument's range - which is audible, and which no amount
+    // of EQ fixes.  The real curve has to come from a sweep and a microphone.
+    float helmholtzResonanceHz = 0.0f;
     // The high pass the DSP will actually apply, and where it came from.
     float highPassHz = 0.0f;
     AcousticSource highPassSource = AcousticSource::NOT_APPLICABLE;

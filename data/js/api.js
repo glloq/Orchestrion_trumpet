@@ -448,10 +448,11 @@ const MOCK = (() => {
                       message: 'compression ratio ' + m.compressionRatio.toFixed(1)
                              + ':1 — outside the 2:1..12:1 range a cone works in' });
       }
-      if (m.frontChamberCornerHz > 0 && m.frontChamberCornerHz < 4000) {
+      if (m.helmholtzResonanceHz > 0 && m.helmholtzResonanceHz < 4000) {
         issues.push({ severity: 'WARNING', field: 'acoustic.frontChamberVolumeMl',
-                      message: 'the front chamber starts loading the throat at '
-                             + Math.round(m.frontChamberCornerHz) + ' Hz' });
+                      message: 'the front chamber resonates at about '
+                             + Math.round(m.helmholtzResonanceHz)
+                             + ' Hz, inside the range the instrument plays' });
       }
       if (m.highPassSource !== 'MEASURED') {
         issues.push({ severity: 'INFO', field: 'acoustic.measuredHighPassHz',
@@ -483,7 +484,7 @@ const MOCK = (() => {
     const volumeM3 = a.frontChamberVolumeMl * 1e-6;
     const areaM2 = throatArea * 1e-6;
     const lengthM = (path + 0.85 * a.leadpipeDiameterMm / 2) * 1e-3;
-    const frontChamberCornerHz = (volumeM3 > 0 && areaM2 > 0 && lengthM > 0)
+    const helmholtzResonanceHz = (volumeM3 > 0 && areaM2 > 0 && lengthM > 0)
       ? (c / (2 * Math.PI)) * Math.sqrt(areaM2 / (volumeM3 * lengthM)) : 0;
 
     const vb = a.rearChamberVolumeMl / 1000;
@@ -507,7 +508,7 @@ const MOCK = (() => {
       coneAreaMm2: coneArea, throatAreaMm2: throatArea,
       compressionRatio: throatArea > 0 ? coneArea / throatArea : 0,
       stage1HalfAngleDeg: halfAngle(a.stage1), stage2HalfAngleDeg: halfAngle(a.stage2),
-      totalPathLengthMm: path, frontChamberCornerHz,
+      totalPathLengthMm: path, helmholtzResonanceHz,
       sealedResonanceHz, sealedResonanceKnown: known,
       highPassHz, highPassSource
     };

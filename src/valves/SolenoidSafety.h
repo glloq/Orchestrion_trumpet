@@ -8,7 +8,12 @@
 //
 //  Rules enforced:
 //    * pull-in at full power for a short burst, then drop to the hold level;
-//    * a hard maximum continuous ON time -> release + latched fault;
+//    * a hard maximum continuous ON time -> release + a LATCHED fault: the
+//      coil is not re-energised when the cooldown expires, because the only
+//      thing that produces a note longer than the maximum is a stuck note, a
+//      crashed sequencer or an unplugged cable, and cycling 5 s on / 3 s off
+//      for ever is not a safe answer to any of them.  It takes a Note Off or an
+//      explicit Clear fault;
 //    * a long term *thermal* ceiling -> forced cooldown;
 //    * the guard keeps running even if MIDI stops arriving.
 //
@@ -58,7 +63,15 @@ public:
 
     SolenoidFault fault() const { return fault_; }
     bool inCooldown() const { return cooldown_; }
-    void clearFault() { fault_ = SolenoidFault::NONE; }
+    // Clears the fault AND the latch, so an operator pressing "clear" on the
+    // diagnostics page really does re-arm the valve.
+    void clearFault() {
+        fault_ = SolenoidFault::NONE;
+        latched_ = false;
+    }
+    // True while a maximum-on-time fault is holding the coil off: the note is
+    // still being requested and the guard is deliberately refusing it.
+    bool latched() const { return latched_; }
 
     // Equivalent continuous duty over the observation window, 0..100: the
     // steady drive level that would heat the coil as much as what it has
@@ -93,6 +106,7 @@ private:
     SolenoidFault fault_ = SolenoidFault::NONE;
     bool requested_ = false;
     bool cooldown_ = false;
+    bool latched_ = false;
     bool windowStarted_ = false;
 };
 

@@ -123,7 +123,7 @@ void WebSocketServerModule::handleTextMessage(uint8_t clientId, const char* text
         // Manual valve command from the Pistons page.
         const uint8_t index = doc["i"] | 0;
         const bool pressed = doc["p"] | false;
-        app_->valves().manualSet(index, pressed);
+        app_->valves().postManual(index, pressed);
     } else if (strEqualsI(command, "monitor")) {
         app_->monitor().setPaused(doc["paused"] | false);
         if (doc["clear"] | false) {

@@ -10,6 +10,7 @@
 #include "audio/Envelope.h"
 #include "audio/Filters.h"
 #include "audio/AcousticModel.h"
+#include "core/LatestValue.h"
 #include "audio/Limiter.h"
 #include "audio/Oscillator.h"
 #include "audio/Profiles.h"
@@ -305,10 +306,99 @@ void test_brightness_changes_the_harmonic_content(void) {
     TEST_ASSERT_TRUE(brightSlope > darkSlope);
 }
 
+// A voicing change must not make the audio task rebuild the mip-map: the
+// producer prepares, the consumer takes it, and an unchanged spectrum costs
+// nothing at all.
+// The mailbox the live voicing travels through. A struct plus a volatile flag
+// looked like this and was not this: the point is that the consumer only ever
+// reads a value the producer has finished writing.
+void test_latest_value_hands_over_whole_values(void) {
+    struct Big {
+        int a = 0;
+        float b[8] = {0};
+        char name[16] = "";
+    };
+    LatestValue<Big> box;
+
+    Big out;
+    TEST_ASSERT_FALSE(box.pending());
+    TEST_ASSERT_FALSE(box.take(out));
+
+    Big first;
+    first.a = 7;
+    for (int i = 0; i < 8; ++i) first.b[i] = static_cast<float>(i);
+    copyString(first.name, sizeof(first.name), "first");
+    box.publish(first);
+    TEST_ASSERT_TRUE(box.pending());
+    TEST_ASSERT_TRUE(box.take(out));
+    TEST_ASSERT_EQUAL_INT(7, out.a);
+    TEST_ASSERT_EQUAL_FLOAT(5.0f, out.b[5]);
+    TEST_ASSERT_EQUAL_STRING("first", out.name);
+    // Taken once, and only once.
+    TEST_ASSERT_FALSE(box.pending());
+    TEST_ASSERT_FALSE(box.take(out));
+
+    // Publishing faster than the consumer takes: the newest value wins and no
+    // intermediate one is ever half-read.
+    for (int n = 0; n < 10; ++n) {
+        Big v;
+        v.a = 100 + n;
+        copyString(v.name, sizeof(v.name), "many");
+        box.publish(v);
+    }
+    TEST_ASSERT_TRUE(box.take(out));
+    TEST_ASSERT_EQUAL_INT(109, out.a);
+    TEST_ASSERT_EQUAL_STRING("many", out.name);
+    TEST_ASSERT_EQUAL_UINT32(11, box.published());
+    TEST_ASSERT_EQUAL_UINT32(2, box.taken());
+}
+
+void test_wavetable_prepare_and_adopt(void) {
+    AdditiveConfig cfg;
+    WavetableSynth synth;
+    synth.configure(cfg, 48000, 2.6f, 0.6f);
+    TEST_ASSERT_TRUE(synth.matches(cfg, 48000, 2.6f, 0.6f));
+    TEST_ASSERT_FALSE(synth.preparePending());
+    // Nothing to take: adopt() is a no-op, not a rebuild.
+    TEST_ASSERT_FALSE(synth.adopt());
+
+    // A different spectrum is prepared off the audio task, and is only live
+    // once the audio task has taken it.
+    AdditiveConfig other = cfg;
+    other.harmonicGain[3] = 0.9f;
+    TEST_ASSERT_FALSE(synth.matches(other, 48000, 2.6f, 0.6f));
+    TEST_ASSERT_TRUE(synth.prepare(other, 48000, 2.6f, 0.6f));
+    TEST_ASSERT_TRUE(synth.preparePending());
+    TEST_ASSERT_TRUE(synth.matches(cfg, 48000, 2.6f, 0.6f));   // still the old one
+    TEST_ASSERT_TRUE(synth.adopt());
+    TEST_ASSERT_TRUE(synth.matches(other, 48000, 2.6f, 0.6f));
+    TEST_ASSERT_FALSE(synth.adopt());
+
+    // The tilts are part of the tables, so moving them alone still rebuilds.
+    TEST_ASSERT_FALSE(synth.matches(other, 48000, 3.4f, 0.6f));
+
+    // A build that has not been taken yet owns the spare: the next one is
+    // refused rather than overwriting a set the audio task may be about to use.
+    TEST_ASSERT_TRUE(synth.prepare(cfg, 48000, 2.6f, 0.6f));
+    TEST_ASSERT_FALSE(synth.prepare(other, 48000, 2.6f, 0.6f));
+    TEST_ASSERT_TRUE(synth.adopt());
+    TEST_ASSERT_TRUE(synth.matches(cfg, 48000, 2.6f, 0.6f));
+
+    // And it really is a working oscillator afterwards.
+    synth.setFrequency(220.0f);
+    float peak = 0.0f;
+    for (uint32_t i = 0; i < 4800; ++i) {
+        const float s = synth.process();
+        TEST_ASSERT_TRUE(std::isfinite(s));
+        if (std::fabs(s) > peak) peak = std::fabs(s);
+    }
+    TEST_ASSERT_TRUE(peak > 0.1f);
+}
+
 void test_wavetable_output_is_bounded(void) {
     AdditiveConfig cfg;
     WavetableSynth synth;
-    synth.configure(cfg, 48000);
+    synth.configure(cfg, 48000, 2.6f, 0.6f);
     synth.setFrequency(330.0f);
     synth.setBrightness(0.8f);
 
@@ -426,7 +516,7 @@ void test_acoustic_model_reports_the_compression_ratio(void) {
     // (60/11)^2 = 29.8 ... the reference build compresses hard, and the
     // validator is expected to say so.
     TEST_ASSERT_FLOAT_WITHIN(0.5f, 29.75f, m.compressionRatio);
-    TEST_ASSERT_TRUE(m.frontChamberCornerHz > 0.0f);
+    TEST_ASSERT_TRUE(m.helmholtzResonanceHz > 0.0f);
     TEST_ASSERT_TRUE(m.stage1HalfAngleDeg > 0.0f && m.stage1HalfAngleDeg < 45.0f);
 }
 
@@ -501,6 +591,8 @@ int main(int, char**) {
     RUN_TEST(test_additive_output_is_bounded_and_finite);
     RUN_TEST(test_additive_drops_partials_above_nyquist);
     RUN_TEST(test_brightness_changes_the_harmonic_content);
+    RUN_TEST(test_latest_value_hands_over_whole_values);
+    RUN_TEST(test_wavetable_prepare_and_adopt);
     RUN_TEST(test_wavetable_output_is_bounded);
     RUN_TEST(test_silent_generator_when_no_frequency);
     RUN_TEST(test_mock_backend_contract);

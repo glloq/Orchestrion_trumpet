@@ -17,7 +17,7 @@ namespace {
 constexpr const char* kPath = "/config.json";
 constexpr const char* kPathNew = "/config.new";
 constexpr const char* kPathBackup = "/config.bak";
-constexpr size_t kJsonCapacity = 8192;
+
 }  // namespace
 
 void ConfigManager::makeDefaults(InstrumentConfiguration& cfg) {
@@ -174,18 +174,25 @@ bool ConfigManager::save() {
 #else
     if (!mounted_) return false;
 
-    static char buffer[kJsonCapacity];
-    const size_t length =
-        serializeConfig(config_, buffer, sizeof(buffer), SecretPolicy::INCLUDE);
-    if (length == 0 || length >= sizeof(buffer) - 1) {
-        OT_LOGE("config", "serialisation overflowed the %u byte buffer",
-                static_cast<unsigned>(sizeof(buffer)));
-        return false;
+    // Straight into the file rather than through a fixed intermediate buffer.
+    // A full instrument - four voicings, every route, four valves, a complete
+    // fingering chart - is nearly 16 kB of JSON, and a 16 kB static buffer that
+    // exists only for the duration of a save is 16 kB the audio engine cannot
+    // have.
+    size_t length = 0;
+    {
+        File f = LittleFS.open(kPathNew, "w");
+        if (!f) {
+            OT_LOGE("config", "could not write %s", kPathNew);
+            return false;
+        }
+        JsonDocument doc;
+        configToJson(config_, doc.to<JsonObject>(), SecretPolicy::INCLUDE);
+        length = serializeJson(doc, f);
+        f.close();
     }
-
-    // Atomic replace: the old file stays valid until the new one is complete.
-    if (!writeFile(kPathNew, buffer, length)) {
-        OT_LOGE("config", "could not write %s", kPathNew);
+    if (length == 0) {
+        OT_LOGE("config", "the configuration could not be serialised");
         return false;
     }
     if (LittleFS.exists(kPathBackup)) LittleFS.remove(kPathBackup);

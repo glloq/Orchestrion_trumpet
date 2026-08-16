@@ -11,10 +11,15 @@
 //
 //  Tasks and priorities:
 //      audio      core 1, prio 20   blocks on the I2S DMA
-//      midi       core 1, prio 18   polls every transport
-//      actuators  core 1, prio 10   servo ramps, solenoid guard
+//      midi       core 1, prio 18   polls every transport, browser included
+//      actuators  core 1, prio 10   servo ramps, solenoid guard, web commands
 //      network    core 0, prio  5   HTTP, WebSocket, Wi-Fi, captive portal
 //      loop()     core 1, prio  1   telemetry and logging only
+//
+//  One owner per engine.  The audio engine belongs to the audio task, the
+//  valves to the actuator task, the router and every transport to the MIDI
+//  task.  Anything else reaches them through a queue or a mailbox and waits for
+//  nothing - see docs/ARCHITECTURE.md.
 // ============================================================================
 #pragma once
 
@@ -54,6 +59,15 @@ public:
     // Brings the hotspot up on demand (web UI, or the board's BOOT button) and
     // starts the captive portal with it.
     void forceHotspot();
+
+    // ---- the live voicing ------------------------------------------------
+    // The control side owns what the user asked for; the audio task owns what
+    // it is currently rendering. Those are not the same thing for up to one
+    // block, and asking the DSP "what did the user just request" is a race:
+    // a commit issued straight after a preview would save the previous sound.
+    // Everything that changes the live voicing goes through here.
+    void requestVoicing(const VoicingConfig& voicing);
+    VoicingConfig desiredVoicing() const;
 
     // ---- accessors used by the web layer --------------------------------
     ConfigManager& configManager() { return config_; }
@@ -117,6 +131,13 @@ private:
     float* renderBuffer_ = nullptr;
     int32_t* outputBuffer_ = nullptr;
     size_t blockFrames_ = 128;
+
+    // What the user last asked the sound to be. Written by the network task
+    // (a preview, a revert, a voicing load) and by the application task (a
+    // Program Change), which is why it has a mutex of its own - two producers
+    // for one mailbox. The audio task never touches it and never waits on it.
+    VoicingConfig desiredVoicing_;
+    mutable Mutex voicingMutex_;
 
     float audioCpu_ = 0.0f;
     uint32_t audioBlocks_ = 0;

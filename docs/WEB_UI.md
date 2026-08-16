@@ -67,15 +67,26 @@ it is a session: hours of small changes, each judged by ear against the last.
 Three things make that possible.
 
 **Everything is live.** A slider posts to `/api/audio/preview`; the firmware
-drops the voicing into a lock-free mailbox and the audio task picks it up at
-the start of the next block — about 2.7 ms at 48 kHz with 128-frame blocks.
-Nothing is saved and nothing reboots until you press Save. Modify → save →
-reboot → listen is far too slow to find a sound with.
+sanitises the voicing, does whatever is expensive about it *on the network
+task* — a changed harmonic means rebuilding the wavetable mip-map, and that is
+not something the audio task can be asked to do between two blocks — then drops
+it into a three-slot mailbox. The audio task takes it at the start of the next
+block, about 2.7 ms at 48 kHz with 128-frame blocks, and its side of the work
+is a copy and a handful of coefficients. Nothing is saved and nothing reboots
+until you press Save. Modify → save → reboot → listen is far too slow to find a
+sound with.
+
+Save commits **what you asked for**, not what the engine happens to be
+rendering at that instant: the two differ for up to one block, and a commit
+issued in the same breath as a slider move must save the slider move.
 
 **A/B.** After twenty minutes of tuning nobody can still remember whether the
-result is actually better. A and B are two complete voicings held in the
-browser; switching is one preview call, so the comparison is instant and the
-ear has nothing to fill in with.
+result is actually better. A and B are two complete sounds held in the browser
+— each with its own voicing *and* its own macro positions, so moving a macro
+after switching shapes the sound you are listening to and not the other one.
+Switching is one preview call, so the comparison is instant and the ear has
+nothing to fill in with. Every preview is numbered and a late reply belonging
+to the other slot is discarded.
 
 **Macros first, parameters second.** Quick Tune offers seven musical controls —
 Body ↔ Brightness, Soft ↔ Brassy, Clean ↔ Breath, Soft ↔ Sharp attack,

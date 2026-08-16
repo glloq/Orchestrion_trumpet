@@ -112,17 +112,57 @@ That ordering is the one required by the project brief: audio DMA, then MIDI
 processing, then valve control, then the WebSocket, then the HTTP UI, then
 logging.
 
+### Who owns what
+
+Each engine has exactly **one** task that may touch it. Everything else posts
+to it and waits for nothing:
+
+| Owned by | What it owns | How anyone else reaches it |
+|---|---|---|
+| audio task | the DSP, the note stack, the filters, the live voicing | `RingBuffer<MidiMessage, 64>` for MIDI, `LatestValue<VoicingConfig>` for the sound |
+| MIDI task | the router, the transports, the monitor | every transport is polled here, the browser keyboard included |
+| actuator task | the valve masks, the drivers, the solenoid guard | `RingBuffer<ValveCommand, 16>` |
+| network task | HTTP, WebSocket, Wi-Fi, and the *desired* voicing | — |
+
 ### Crossing between tasks
 
 * **MIDI → audio**: a lock-free `RingBuffer<MidiMessage, 64>`. `onMidi()` runs
   on the MIDI task and only pushes; the audio task drains it at block
   boundaries, at most 32 messages per block so the work stays bounded.
-* **MIDI → valves**: a direct call. The valve controller only touches its own
-  state and the actuator drivers, which are owned by the actuator task's
-  peripherals; the operations are single register writes.
+* **Browser keyboard → MIDI**: the WebSocket runs on the network task, so
+  `injectFromWeb()` only queues; `MidiWebSocketTransport::poll()` delivers it
+  from the MIDI task, exactly like DIN or BLE. Otherwise the audio queue would
+  have two producers and stop being the single-producer queue it is built as.
+* **MIDI → valves**: a direct call, from the MIDI task, into the controller's
+  own state.
+* **Web → valves**: `RingBuffer<ValveCommand, 16>`, drained by `update()` on
+  the actuator task. A calibration slider and a servo ramp must not write the
+  same driver register from two cores. The one exception is **panic**, which
+  acts immediately and deliberately: it only ever drives outputs *off* and
+  latches the controller stopped, so every interleaving converges on silence -
+  and a panic that waits up to 5 ms for a task cycle is not a panic.
+* **Control → audio, the live voicing**: `LatestValue<VoicingConfig>`, a
+  three-slot mailbox. A `volatile bool` beside a struct is not a mailbox:
+  copying a `VoicingConfig` is hundreds of stores and the audio task would
+  eventually read half of one sound and half of another. Anything expensive
+  about a voicing change - rebuilding the wavetable mip-map, over a hundred
+  thousand `sin()` calls - is done by the *producer* before it publishes, so
+  the audio task's side of a preview is a copy and a handful of coefficients.
+* **Two producers, one mailbox**: a preview comes from the network task and a
+  Program Change from the application task. They are serialised against each
+  other by a mutex in `AppController` (`Platform.h` has the primitive). That
+  mutex is never taken by the audio task, which is the whole point.
 * **Anything → web**: `SystemState` holds plain scalars that the network task
   reads. A torn read of a counter is harmless and no lock is ever taken on the
   audio or MIDI path.
+
+### The live sound, and what is actually saved
+
+The control side owns *what the user asked for* (`AppController::desiredVoicing()`)
+and the audio task owns *what is currently rendering*. They differ for up to
+one block, so **PREVIEW → COMMIT reads the desired voicing, never the engine's**:
+committing straight after a preview used to save the sound from before the last
+slider move.
 
 ### Real-time rules
 

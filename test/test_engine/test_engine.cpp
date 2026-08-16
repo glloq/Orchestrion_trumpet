@@ -251,7 +251,8 @@ void test_engine_waits_for_the_pistons_before_speaking(void) {
         rig.cfg.valves.items[i].type = ValveActuatorType::SERVO;
         rig.cfg.valves.items[i].releasedAngle = 40;
         rig.cfg.valves.items[i].pressedAngle = 88;
-        rig.cfg.valves.items[i].speedDegPerSec = 900;    // ~65 ms with margin
+        rig.cfg.valves.items[i].speedDegPerSec = 900;
+        rig.cfg.valves.items[i].accelDegPerSec2 = 6000;   // ~190 ms with margin
     }
     rig.start();
 
@@ -259,13 +260,58 @@ void test_engine_waits_for_the_pistons_before_speaking(void) {
     // onMidi() only queues; the message is handled at the next block boundary.
     rig.engine.onMidi(MidiMessage::noteOn(1, 64, 100));
     rig.render(1);
-    TEST_ASSERT_TRUE(rig.engine.lastAttackDelayMs() > 40);
-    TEST_ASSERT_TRUE(rig.engine.lastAttackDelayMs() < 120);
+    TEST_ASSERT_TRUE(rig.engine.lastAttackDelayMs() > 150);
+    TEST_ASSERT_TRUE(rig.engine.lastAttackDelayMs() < 240);
 
-    // 10 blocks is 27 ms at 48 kHz: the pistons are still moving.
-    TEST_ASSERT_FLOAT_WITHIN(0.0005f, 0.0f, rig.peakOver(10));
-    // By 100 ms they have arrived and the note speaks.
-    TEST_ASSERT_TRUE(rig.peakOver(60) > 0.01f);
+    // 30 blocks is 80 ms at 48 kHz: the pistons are still moving.
+    TEST_ASSERT_FLOAT_WITHIN(0.0005f, 0.0f, rig.peakOver(30));
+    // By 250 ms they have arrived and the note speaks.
+    TEST_ASSERT_TRUE(rig.peakOver(90) > 0.01f);
+}
+
+// The one the audit asked for, and the one that was actually broken: on a
+// SLURRED note the attack is not re-articulated, so nothing stops the pitch
+// from moving. It used to move at the very next control tick - 32 samples -
+// while the pistons were still travelling, which plays the new note through
+// the old bore for the whole of the delay.
+void test_engine_legato_pitch_waits_for_the_pistons(void) {
+    Rig rig;
+    rig.cfg.instrument.legato = true;
+    rig.cfg.instrument.retrigger = false;
+    rig.cfg.instrument.portamentoMs = 0.0f;
+    rig.cfg.valves.sync.enabled = true;
+    rig.cfg.valves.sync.maxDelayMs = 500;
+    for (uint8_t i = 0; i < rig.cfg.valves.count; ++i) {
+        rig.cfg.valves.items[i].type = ValveActuatorType::SERVO;
+        rig.cfg.valves.items[i].releasedAngle = 40;
+        rig.cfg.valves.items[i].pressedAngle = 88;
+        rig.cfg.valves.items[i].speedDegPerSec = 900;
+        rig.cfg.valves.items[i].accelDegPerSec2 = 6000;   // ~190 ms
+    }
+    rig.start();
+
+    // Concert C4: written D4, fingering 1-3.
+    rig.engine.onMidi(MidiMessage::noteOn(1, 60, 100));
+    rig.render(200);   // well past the delay, the note is speaking
+    const float first = rig.engine.status().frequencyHz;
+    TEST_ASSERT_FLOAT_WITHIN(2.0f, 261.6f, first);
+
+    // Slur to concert E4 (written F#4, fingering 2) without releasing the first
+    // key: a different fingering, so the pistons have to move.
+    rig.engine.onMidi(MidiMessage::noteOn(1, 64, 100));
+    rig.render(1);
+    const uint16_t delay = rig.engine.lastAttackDelayMs();
+    TEST_ASSERT_TRUE(delay > 150);
+
+    // Halfway through the movement the instrument is still sounding the FIRST
+    // note. Anything else means the bore and the pitch disagree.
+    rig.render(30);                                    // ~80 ms
+    TEST_ASSERT_FLOAT_WITHIN(2.0f, 261.6f, rig.engine.status().frequencyHz);
+    TEST_ASSERT_TRUE(rig.engine.status().frequencyHz < 300.0f);
+
+    // Once the pistons have landed the new pitch is released.
+    rig.render(90);                                    // past ~190 ms
+    TEST_ASSERT_FLOAT_WITHIN(2.0f, 329.6f, rig.engine.status().frequencyHz);
 }
 
 void test_engine_does_not_wait_when_the_fingering_is_unchanged(void) {
@@ -541,6 +587,7 @@ int main(int, char**) {
     RUN_TEST(test_engine_output_never_exceeds_the_safe_peak);
     RUN_TEST(test_engine_test_tone_and_sweep);
     RUN_TEST(test_engine_waits_for_the_pistons_before_speaking);
+    RUN_TEST(test_engine_legato_pitch_waits_for_the_pistons);
     RUN_TEST(test_engine_does_not_wait_when_the_fingering_is_unchanged);
     RUN_TEST(test_engine_never_waits_when_synchronisation_is_off);
     RUN_TEST(test_engine_cancels_a_pending_note_that_is_released_first);

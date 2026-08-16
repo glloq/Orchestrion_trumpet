@@ -210,8 +210,13 @@ This is the part that must work when nothing else does.
   history: a coil that has just been energised is legitimately at 100 % duty,
   and firing on the first note would make the instrument unplayable.
 * **Cooldown.** While it runs the coil stays off even though the note is still
-  held. When it expires, if the note is *still* held, one fresh pull-in is
-  allowed.
+  held. What happens when it expires depends on *which* guard fired, because
+  the two faults mean different things:
+
+  | Fault | On expiry |
+  |---|---|
+  | `OVER_DUTY` — the coil is running warm | the note, if still held, gets one fresh pull-in. The thermal integral will trip again if the load is still too high, so the worst case is a duty cycle the coil can survive. |
+  | `OVER_TIME` — the note never ended | **latched**. The coil stays off until the note is released or an operator clears the fault. Nothing produces a note longer than the maximum except a stuck note, a crashed sequencer or an unplugged cable, and cycling 5 s on / 3 s off for ever is not a safe answer to any of them. |
 * **A configuration with no maximum ON time is refused** by the validator, and
   a stored file that somehow contains one is repaired at load. It cannot be
   switched off from the web UI.
@@ -246,8 +251,9 @@ thermal load          integral of duty² · dt over the window
 
 ## Attack synchronisation
 
-A servo swinging 40° → 88° at 900 °/s is already ~53 ms behind the Note-On, and
-a solenoid does not have its plunger home until its pull-in burst is over. The
+A servo swinging 40° → 88° at 900 °/s and 6000 °/s² is ~190 ms behind the
+Note-On, and a solenoid does not have its plunger home until its pull-in burst
+is over. The
 sound engine and the valve engine receive the same Note-On at the same instant,
 so starting the attack immediately means the first tens of milliseconds of
 every note are played through the **previous fingering** — through a bore that
@@ -257,7 +263,7 @@ here the pistons *are* the resonator.
 The engine therefore holds the attack for as long as the actuators need:
 
 ```
-settle time per valve   servo    |pressed − released| / speed  + 12 ms margin
+settle time per valve   servo    trapezoidal profile           + 12 ms margin
                         solenoid pullInMs                      + 12 ms margin
                         measured a bench figure always wins
 
@@ -265,6 +271,15 @@ delay for a note        the slowest valve that actually has to move
                         (they move together, so the delays do not add up)
                         + trim, capped at the ceiling
 ```
+
+The servo figure is the profile `ServoMotion` actually runs, acceleration
+included: ramp up, cruise if there is room, ramp down so it stops exactly on
+target. Over a 48° throw at 900 °/s and 6000 °/s² there is no room to cruise at
+all — the movement is triangular and takes `2·√(48/6000)` = 179 ms, where
+dividing the travel by the top speed says 53 ms. Under-estimating the delay is
+the one failure mode that matters here: the note speaks early, through the
+previous fingering, which is exactly what the synchronisation exists to
+prevent.
 
 Only the valves whose state differs are considered, so slurring to a note on
 the same combination costs nothing. The whole calculation is in
@@ -276,7 +291,7 @@ it at block boundaries (2.7 ms at 48 kHz / 128 frames).
 | `enabled` | on | wait for the pistons at all |
 | `onlyWhenFingeringChanges` | on | a repeated combination is not delayed |
 | `trimMs` | 0 | bench correction, may be negative |
-| `maxDelayMs` | 120 | hard ceiling, whatever the arithmetic says |
+| `maxDelayMs` | 250 | hard ceiling, whatever the arithmetic says |
 
 Settings → Pistons shows the estimate for the slowest piston as configured, and
 the diagnostics page reports the delay the last note actually waited, so the

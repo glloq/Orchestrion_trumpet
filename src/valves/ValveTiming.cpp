@@ -13,19 +13,53 @@ constexpr uint16_t kMechanicalMarginMs = 12;
 constexpr uint16_t kPerValveCeilingMs = 400;
 }  // namespace
 
+// The same profile ServoMotion actually runs: ramp up at `accel`, cruise at
+// `speed` if there is room for it, ramp down so the servo stops exactly on
+// target.  Dividing the travel by the top speed - which is what this used to do
+// - assumes the servo is already at full speed when it starts, and for a short
+// throw it never gets there at all: 48 deg at 900 deg/s and 6000 deg/s^2 takes
+// 179 ms, not the 65 ms the simple quotient predicts.  Under-estimating here
+// means the note speaks before the piston has landed, which is precisely what
+// the synchronisation is for.
+//
+//   short throw (dist <= v^2/a)   triangular   t = 2 * sqrt(dist / a)
+//   long throw                    trapezoidal  t = dist / v + v / a
+//
+// Integer millisecond arithmetic throughout: this runs at every Note On, on the
+// audio task.
+uint32_t servoTravelMs(uint32_t travelDegrees, uint16_t speedDegPerSec,
+                       uint16_t accelDegPerSec2) {
+    if (travelDegrees == 0) return 0;
+    if (speedDegPerSec == 0) return kPerValveCeilingMs;
+    const uint32_t v = speedDegPerSec;
+    // No acceleration limit configured: the old model is then the right one.
+    if (accelDegPerSec2 == 0) return (travelDegrees * 1000u) / v;
+    const uint32_t a = accelDegPerSec2;
+
+    // Distance needed to reach the top speed and come back down again.
+    const uint32_t rampDistance = (v * v) / a;
+    if (travelDegrees <= rampDistance) {
+        // sqrt(dist/a) seconds -> 1000 * sqrt(dist/a) ms = sqrt(1e6 * dist / a).
+        return 2u * isqrt32((1000000u / a) * travelDegrees +
+                            ((1000000u % a) * travelDegrees) / a);
+    }
+    return (travelDegrees * 1000u) / v + (v * 1000u) / a;
+}
+
 uint16_t valveSettleMs(const ValveConfig& valve) {
     if (valve.measuredSettleMs > 0) return valve.measuredSettleMs;
 
     switch (valve.type) {
         case ValveActuatorType::SERVO: {
             if (valve.speedDegPerSec == 0) return kPerValveCeilingMs;
-            const uint16_t travel = valve.pressedAngle > valve.releasedAngle
-                                        ? static_cast<uint16_t>(valve.pressedAngle -
+            const uint32_t travel = valve.pressedAngle > valve.releasedAngle
+                                        ? static_cast<uint32_t>(valve.pressedAngle -
                                                                 valve.releasedAngle)
-                                        : static_cast<uint16_t>(valve.releasedAngle -
+                                        : static_cast<uint32_t>(valve.releasedAngle -
                                                                 valve.pressedAngle);
-            const uint32_t ms = (static_cast<uint32_t>(travel) * 1000u) / valve.speedDegPerSec;
-            const uint32_t total = ms + kMechanicalMarginMs;
+            const uint32_t total = servoTravelMs(travel, valve.speedDegPerSec,
+                                                 valve.accelDegPerSec2) +
+                                   kMechanicalMarginMs;
             return static_cast<uint16_t>(total > kPerValveCeilingMs ? kPerValveCeilingMs : total);
         }
         case ValveActuatorType::SOLENOID: {

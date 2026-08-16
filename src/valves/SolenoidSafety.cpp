@@ -13,24 +13,6 @@ constexpr uint32_t kMaxWindowMs = 20000;
 // that has just been energised is legitimately at 100% duty, and firing on the
 // very first note would make the instrument unplayable.
 constexpr uint32_t kMinObservationMs = 2000;
-
-// Integer square root, so the thermal integral can be converted back into an
-// equivalent duty without pulling <cmath> into the valve task.
-uint32_t isqrt(uint32_t value) {
-    uint32_t result = 0;
-    uint32_t bit = 1u << 30;
-    while (bit > value) bit >>= 2;
-    while (bit != 0) {
-        if (value >= result + bit) {
-            value -= result + bit;
-            result = (result >> 1) + bit;
-        } else {
-            result >>= 1;
-        }
-        bit >>= 2;
-    }
-    return result;
-}
 }  // namespace
 
 void SolenoidSafety::configure(const ValveConfig& cfg) {
@@ -38,6 +20,7 @@ void SolenoidSafety::configure(const ValveConfig& cfg) {
     duty_ = 0;
     requested_ = false;
     cooldown_ = false;
+    latched_ = false;
     windowStarted_ = false;
     fault_ = SolenoidFault::NONE;
     cooldownUntilMs_ = 0;
@@ -89,6 +72,11 @@ void SolenoidSafety::trip(SolenoidFault fault, uint32_t nowMs) {
     setDuty(nowMs, 0);
     fault_ = fault;
     cooldown_ = true;
+    // OVER_DUTY is about a coil that is running warm: resting it and letting it
+    // play again is the right answer, and the thermal integral will trip again
+    // if the load is still too high. OVER_TIME is about a note that never ends,
+    // and no amount of resting fixes that.
+    if (fault == SolenoidFault::OVER_TIME) latched_ = true;
     cooldownUntilMs_ = nowMs + (cfg_.cooldownMs ? cfg_.cooldownMs : 1000u);
 }
 
@@ -99,6 +87,12 @@ void SolenoidSafety::request(bool pressed, uint32_t nowMs) {
     if (!pressed) {
         requested_ = false;
         setDuty(nowMs, 0);
+        // The note ended: whatever the stuck-note guard was holding off, the
+        // instrument is playable again.
+        if (latched_) {
+            latched_ = false;
+            fault_ = SolenoidFault::NONE;
+        }
         return;
     }
 
@@ -132,10 +126,18 @@ void SolenoidSafety::update(uint32_t nowMs) {
     if (cooldown_) {
         if (static_cast<int32_t>(nowMs - cooldownUntilMs_) < 0) return;
         cooldown_ = false;
+        // A latched maximum-on-time fault outlives the cooldown: re-arming here
+        // would turn one stuck note into an indefinite on/off cycle on a coil
+        // nobody is watching.
+        if (latched_) return;
         // The note may still be held: allow one fresh pull-in.
         if (requested_) setDuty(nowMs, cfg_.pullInPwm);
         return;
     }
+
+    // Latched and out of cooldown: stay off until the note ends or an operator
+    // clears the fault.
+    if (latched_) return;
 
     if (!requested_ || duty_ == 0) return;
 
@@ -177,7 +179,7 @@ uint8_t SolenoidSafety::measuredDutyPercent() const {
     // continuous duty is its square root.
     uint32_t meanSquare = load / elapsed;
     if (meanSquare > 10000u) meanSquare = 10000u;
-    return static_cast<uint8_t>(isqrt(meanSquare));
+    return static_cast<uint8_t>(isqrt32(meanSquare));
 }
 
 }  // namespace ot
