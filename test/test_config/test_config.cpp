@@ -281,6 +281,55 @@ void test_migration_refuses_a_newer_schema(void) {
 }
 
 // ---------------------------------------------------------------------------
+// The two engines must be handed the same notes
+// ---------------------------------------------------------------------------
+namespace {
+
+// The routes the defaults create from a given source to each engine.
+MidiRoute* engineRoute(InstrumentConfiguration& cfg, MidiPort source, MidiPort destination) {
+    for (uint8_t i = 0; i < cfg.midi.routeCount && i < kMaxRoutes; ++i) {
+        MidiRoute& r = cfg.midi.routes[i];
+        if (r.source == source && r.destination == destination) return &r;
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+void test_defaults_feed_both_engines_identically(void) {
+    InstrumentConfiguration cfg;
+    ConfigManager::makeDefaults(cfg);
+
+    ValidationReport report;
+    ConfigValidator::validate(cfg, boardCaps(), report);
+    TEST_ASSERT_FALSE(hasIssue(report, Severity::WARNING, "midi.routes"));
+}
+
+void test_a_transpose_on_one_engine_only_is_a_warning(void) {
+    InstrumentConfiguration cfg;
+    ConfigManager::makeDefaults(cfg);
+    MidiRoute* sound = engineRoute(cfg, MidiPort::USB, MidiPort::SOUND_ENGINE);
+    TEST_ASSERT_NOT_NULL(sound);
+    sound->transpose = 12;   // the synthesis plays an octave the pistons do not
+
+    ValidationReport report;
+    ConfigValidator::validate(cfg, boardCaps(), report);
+    TEST_ASSERT_TRUE(hasIssue(report, Severity::WARNING, "midi.routes"));
+}
+
+void test_sound_without_pistons_is_a_warning(void) {
+    InstrumentConfiguration cfg;
+    ConfigManager::makeDefaults(cfg);
+    MidiRoute* valves = engineRoute(cfg, MidiPort::USB, MidiPort::VALVE_ENGINE);
+    TEST_ASSERT_NOT_NULL(valves);
+    valves->enabled = false;
+
+    ValidationReport report;
+    ConfigValidator::validate(cfg, boardCaps(), report);
+    TEST_ASSERT_TRUE(hasIssue(report, Severity::WARNING, "midi.routes"));
+}
+
+// ---------------------------------------------------------------------------
 // GPIO conflict detection
 // ---------------------------------------------------------------------------
 void test_duplicate_gpio_is_an_error(void) {
@@ -596,6 +645,9 @@ int main(int, char**) {
     RUN_TEST(test_migration_v2_leaves_a_custom_speaker_alone);
     RUN_TEST(test_migration_is_idempotent);
     RUN_TEST(test_migration_refuses_a_newer_schema);
+    RUN_TEST(test_defaults_feed_both_engines_identically);
+    RUN_TEST(test_a_transpose_on_one_engine_only_is_a_warning);
+    RUN_TEST(test_sound_without_pistons_is_a_warning);
     RUN_TEST(test_duplicate_gpio_is_an_error);
     RUN_TEST(test_flash_pin_is_an_error);
     RUN_TEST(test_input_only_pin_cannot_drive_a_servo);

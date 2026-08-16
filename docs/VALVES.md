@@ -284,6 +284,25 @@ the figure** — the estimate ignores load entirely.
 
 ![Attack synchronisation](../img/screenshots/settings-valve-sync.png)
 
+## Sustain
+
+The two engines share a note stack and a fingering table, and they must never
+disagree about the note being played. That includes CC 64: when the pedal holds
+a note whose key has come up, the sound engine keeps it speaking, so the valve
+engine holds the same fingering down until the pedal is released.
+
+```
+pedal down, key down     the fingering of the note, as usual
+pedal down, key up       that fingering is held
+pedal down, new note     the new note wins, and becomes what the pedal holds
+pedal up                 released, unless a key is still down
+All Notes Off / panic    released, and the pedal is no longer considered down
+```
+
+A valve mapped to CC 64 in `MIDI_CC` mode still follows it as a plain
+controller — the pedal only holds a fingering in `AUTO`, where there is a note
+to hold.
+
 ## PANIC
 
 Reachable from the web UI, over MIDI and through `POST /api/panic`. It

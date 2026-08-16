@@ -580,6 +580,91 @@ void test_test_pulse_restores_the_played_state(void) {
     TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
 }
 
+// CC 64. The sound engine keeps a sustained note speaking; if the pistons come
+// straight back up, that note finishes through the open bore — the two engines
+// must agree about the current note, always.
+void test_controller_sustain_holds_the_fingering(void) {
+    ValveController controller;
+    controller.begin(mixedConfig(), writtenPitch());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 127));
+    // Written C#4 is 1-2-3.
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+
+    // The key comes up; the pedal is down, so the pistons stay where they are.
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.desiredMask());
+
+    // Releasing the pedal releases them.
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 0));
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+}
+
+void test_controller_sustain_yields_to_a_new_note(void) {
+    ValveController controller;
+    controller.begin(mixedConfig(), writtenPitch());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 127));
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));    // 1-2-3
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+
+    // A new note wins over what the pedal is holding: written E4 is 1-2.
+    controller.onMidi(MidiMessage::noteOn(1, 64, 100));
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+
+    // Its own key comes up, and now *that* fingering is what the pedal holds.
+    controller.onMidi(MidiMessage::noteOff(1, 64));
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+
+    // A key still down outlives the pedal.
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 0));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+}
+
+void test_controller_sustain_never_survives_a_panic_message(void) {
+    ValveController controller;
+    controller.begin(mixedConfig(), writtenPitch());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 127));
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0x07, controller.currentMask());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::AllNotesOff, 0));
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+
+    // And the pedal must not still be considered down afterwards.
+    controller.onMidi(MidiMessage::noteOn(1, 61, 100));
+    controller.onMidi(MidiMessage::noteOff(1, 61));
+    TEST_ASSERT_EQUAL_UINT8(0, controller.currentMask());
+}
+
+// A test pulse used to be cleaned up against `desiredMask()`, which answered 0
+// while the pedal was holding a note: pulsing any valve lifted the sustained
+// fingering for good.
+void test_controller_sustained_fingering_survives_a_test_pulse(void) {
+    ValveController controller;
+    controller.begin(mixedConfig(), writtenPitch());
+
+    controller.onMidi(MidiMessage::controlChange(1, cc::Sustain, 127));
+    controller.onMidi(MidiMessage::noteOn(1, 64, 100));    // 1-2
+    controller.onMidi(MidiMessage::noteOff(1, 64));
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+
+    hostSetMillis(4000);
+    TEST_ASSERT_TRUE(controller.testPulse(2, 200));
+    hostSetMillis(4300);
+    controller.update();
+    TEST_ASSERT_FALSE(controller.status(2).pressed);
+    TEST_ASSERT_EQUAL_UINT8(0x03, controller.currentMask());
+}
+
 void test_controller_ignores_valves_it_does_not_have(void) {
     ValveController controller;
     ValvesConfig cfg = mixedConfig();
@@ -716,6 +801,10 @@ int main(int, char**) {
     RUN_TEST(test_controller_panic_parks_everything);
     RUN_TEST(test_controller_modes);
     RUN_TEST(test_test_pulse_restores_the_played_state);
+    RUN_TEST(test_controller_sustain_holds_the_fingering);
+    RUN_TEST(test_controller_sustain_yields_to_a_new_note);
+    RUN_TEST(test_controller_sustain_never_survives_a_panic_message);
+    RUN_TEST(test_controller_sustained_fingering_survives_a_test_pulse);
     RUN_TEST(test_controller_ignores_valves_it_does_not_have);
     RUN_TEST(test_mock_actuator_contract);
     RUN_TEST(test_settle_time_follows_the_servo_travel);

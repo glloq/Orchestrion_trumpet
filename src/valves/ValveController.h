@@ -83,6 +83,13 @@ private:
     uint8_t currentMask_ = 0;
     uint8_t manualMask_ = 0;
     uint8_t ccMask_ = 0;
+    // CC 64. The sound engine holds the note after the key comes up, so the
+    // pistons have to hold the fingering with it: a bore that changes under a
+    // note that is still speaking is the one thing the two engines must never
+    // disagree about. `sustainedMask_` is what the pedal is holding down, and
+    // it is what `desiredMask()` answers while no key is pressed.
+    bool sustainDown_ = false;
+    uint8_t sustainedMask_ = 0;
     uint32_t pulseUntilMs_[kMaxValves] = {0};
     uint8_t pulseMask_ = 0;
     bool stopped_ = false;
