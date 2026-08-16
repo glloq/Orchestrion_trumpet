@@ -284,7 +284,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ---- trumpet & pistons --------------------------------------------------- */
 .trumpet-wrap { display: flex; justify-content: center; padding: 6px 0 2px; }
-.trumpet { width: 100%; max-width: 620px; height: auto; }
+.trumpet { width: 100%; max-width: 720px; height: auto; }
 .piston-btn { cursor: pointer; }
 
 .valves { display: flex; gap: 12px; flex-wrap: wrap; }
