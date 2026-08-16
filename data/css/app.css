@@ -32,14 +32,13 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 
-  /* Trumpet — brass tones, identical in both themes. */
-  --br-body-a: #d9a441;
-  --br-body-b: #b07d22;
-  --br-body-c: #8a5f16;
-  --br-shade: #6d4a12;
-  --br-highlight: #f6dfa4;
-  --br-piston: #cfd6e0;
-  --br-piston-ink: #46505e;
+  /* Trumpet — flat, five colours, identical in both themes. No gradients:
+     the drawing is a pictogram of the instrument, not a rendering of it. */
+  --br-body: #f7c22a;        /* the whole instrument */
+  --br-body-dark: #dda417;   /* the few parts that need to separate */
+  --br-bore: #dd7341;        /* inside the bell */
+  --br-gloss: #fff6c9;       /* the one highlight */
+  --br-valve: #9e740b;       /* piston buttons */
   --br-piston-down: var(--accent);
 
   /* Wiring map — rails and module bodies. */
