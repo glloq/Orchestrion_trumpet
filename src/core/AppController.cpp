@@ -123,8 +123,8 @@ bool AppController::safeMode() const {
 bool AppController::startAudio() {
     const InstrumentConfiguration& cfg = config_.config();
 
-    audioEngine_.configure(cfg.audio, cfg.speaker, cfg.amplifier, cfg.acoustic, cfg.instrument,
-                           cfg.valves);
+    audioEngine_.configure(cfg.audio, cfg.voicing, cfg.speaker, cfg.amplifier, cfg.acoustic,
+                           cfg.instrument, cfg.valves);
     audioEngine_.begin();
     audioEngine_.setMuted(true);
 
@@ -394,6 +394,19 @@ void AppController::networkTask() {
 // ---------------------------------------------------------------------------
 void AppController::tick() {
     const uint32_t now = OT_MILLIS();
+
+    // A Program Change asked for a saved voicing.  The engine latches the
+    // number but does not own the library, so the swap happens here - out of
+    // the audio task, and through the same lock-free path a web preview uses.
+    const int8_t program = audioEngine_.takeProgramChange();
+    if (program >= 0) {
+        const VoicingLibrary& lib = config_.config().voicings;
+        if (program < static_cast<int8_t>(lib.count)) {
+            audioEngine_.requestVoicing(lib.items[program]);
+            OT_LOGI("audio", "program %d -> voicing \"%s\"", program,
+                    lib.items[program].name);
+        }
+    }
 
     if (rebootAtMs_ != 0 && static_cast<int32_t>(now - rebootAtMs_) >= 0) {
 #if !defined(OT_HOST_BUILD)

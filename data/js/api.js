@@ -80,6 +80,15 @@ const API = (() => {
     audioTest:      (opts) => request('POST', '/api/audio/test', opts),
     audioMute:      (muted) => request('POST', '/api/audio/mute', { muted }),
     audioVolume:    (volume) => request('POST', '/api/audio/volume', { volume }),
+    // The live path. Preview changes the sound now and nothing else; revert
+    // puts back what is stored; commit makes the live sound the stored one.
+    audioPreview:   (voicing) => request('POST', '/api/audio/preview', voicing),
+    audioRevert:    () => request('POST', '/api/audio/revert', {}),
+    audioCommit:    () => request('POST', '/api/audio/commit', {}),
+    voicings:       () => request('GET', '/api/voicings'),
+    voicingSave:    (name) => request('POST', '/api/voicings/save', { name }),
+    voicingLoad:    (name) => request('POST', '/api/voicings/load', { name }),
+    voicingDelete:  (name) => request('POST', '/api/voicings/delete', { name }),
     valveTest:      (valve, durationMs) => request('POST', '/api/valve/test', { valve, durationMs }),
     valveMode:      (mode) => request('POST', '/api/valve/mode', { mode }),
     valveManual:    (valve, pressed) => request('POST', '/api/valve/manual', { valve, pressed }),
@@ -136,6 +145,38 @@ const API = (() => {
    --------------------------------------------------------------------------- */
 const MOCK = (() => {
 
+  // Everything that changes the sound and nothing that changes safety — the
+  // same split the firmware makes.
+  function defaultVoicing() {
+    return {
+      name: 'Natural', engine: 'ADDITIVE', pitchBendRange: 2,
+      darkTilt: 2.6, brightTilt: 0.6, hybridMix: 0.6,
+      velocityFloor: 0.25, breathToVolume: 1, expressionToVolume: 1,
+      aftertouchToBrightness: 0.25, aftertouchToVolume: 0, outputTrimDb: 0,
+      envelope: { attackMs: 12, decayMs: 90, sustain: 0.82, releaseMs: 70,
+                  attackNoise: 0.12, breathNoise: 0.03 },
+      vibrato: { source: 'CC1', frequencyHz: 5.5, depthCents: 22, delayMs: 250, fadeInMs: 350 },
+      additive: { harmonicCount: 10,
+                  harmonicGain: [1, .72, .55, .42, .33, .25, .19, .14, .1, .07,
+                                 .05, .04, .03, .02, .015, .01],
+                  velocityBrightness: 0.85, breathBrightness: 0.7,
+                  expressionBrightness: 0.35, pitchBrightness: 0.3 },
+      exciter: { drive: 1.6, asymmetry: 0.25, pressure: 0.7, pressureToDrive: 0.9,
+                 noiseAmount: 0.05, transientMs: 18 },
+      eq: [{ frequency: 220, gainDb: 0, q: 0.8, enabled: false },
+           { frequency: 480, gainDb: 0, q: 0.9, enabled: false },
+           { frequency: 900, gainDb: 0, q: 0.9, enabled: false },
+           { frequency: 1800, gainDb: 0, q: 0.9, enabled: false },
+           { frequency: 3200, gainDb: 0, q: 0.9, enabled: false },
+           { frequency: 6400, gainDb: 0, q: 0.8, enabled: false }],
+      registerCurve: [{ note: 52, gainDb: 0, brightness: 0 },
+                      { note: 60, gainDb: 0, brightness: 0 },
+                      { note: 67, gainDb: 0, brightness: 0 },
+                      { note: 72, gainDb: 0, brightness: 0 },
+                      { note: 86, gainDb: 0, brightness: 0 }]
+    };
+  }
+
   function defaultConfig() {
     const valve = (gpio) => ({
       type: 'SERVO', driver: 'ESP32_PWM', gpio, channel: 0,
@@ -162,7 +203,7 @@ const MOCK = (() => {
     });
 
     return {
-      schemaVersion: 3,
+      schemaVersion: 4,
       board: { type: 'ESP32_S3' },
       system: { deviceName: 'Orchestrion Trumpet', preset: 'STANDARD',
                 wizardCompleted: true, safeModeForced: false },
@@ -170,23 +211,15 @@ const MOCK = (() => {
               hostname: 'midi-trumpet', apChannel: 6, captivePortal: true },
       audio: {
         backend: 'PCM5102A', sampleRate: 48000, bitDepth: 24, blockSize: 128, dmaBuffers: 6,
-        masterVolume: 0.75, engine: 'ADDITIVE', pitchBendRange: 2, codecAddress: 16,
+        masterVolume: 0.75, codecAddress: 16,
         sdModePin: -1, internalDacChannel: 1, highPassHz: 160, startupMute: true,
+        programChangeSelectsVoicing: false,
         i2s: { bclk: 5, ws: 6, dout: 7, din: -1, mclk: -1 },
         i2c: { sda: 8, scl: 9, frequency: 400000 },
-        eq: [{ frequency: 220, gainDb: 0, q: 0.8, enabled: false },
-             { frequency: 900, gainDb: 0, q: 0.9, enabled: false },
-             { frequency: 3200, gainDb: 0, q: 0.9, enabled: false }],
-        envelope: { attackMs: 12, decayMs: 90, sustain: 0.82, releaseMs: 70,
-                    attackNoise: 0.12, breathNoise: 0.03 },
-        vibrato: { source: 'CC1', frequencyHz: 5.5, depthCents: 22, delayMs: 250, fadeInMs: 350 },
-        additive: { harmonicCount: 10,
-                    harmonicGain: [1, .72, .55, .42, .33, .25, .19, .14, .1, .07,
-                                   .05, .04, .03, .02, .015, .01],
-                    velocityBrightness: 0.85, breathBrightness: 0.7,
-                    expressionBrightness: 0.35, pitchBrightness: 0.3 },
         limiter: { enabled: true, thresholdDb: -3, attackMs: 1.5, releaseMs: 90, hardCeiling: 0.985 }
       },
+      voicing: defaultVoicing(),
+      voicings: [],
       amplifier: { type: 'TPA3118D2', maxPower: 25, gainDb: 26, speakerImpedance: 8, volumeLimit: 1 },
       speaker: { profile: 'VISATON_FRS8M', name: 'Visaton FRS 8 M', impedance: 8, powerRms: 30,
                  powerMax: 50, fsHz: 125, vasLitres: 0,
@@ -227,6 +260,7 @@ const MOCK = (() => {
       { pressed: true, type: 'SERVO', angle: 88, duty: 0, fault: false },
       { pressed: false, type: 'SOLENOID', angle: 0, duty: 0, fault: false }
     ],
+    liveVoicing: defaultVoicing(),
     note: 64, velocity: 96, frequency: 329.6, muted: false, volume: 0.75,
     scanned: false,
     monitor: {
@@ -479,6 +513,50 @@ const MOCK = (() => {
     };
   }
 
+  // Mirrors ConfigValidator::sanitiseVoicing so the offline UI clamps exactly
+  // where the firmware clamps.
+  const CLAMPS = {
+    'envelope.attackMs': [0.5, 500], 'envelope.decayMs': [1, 2000],
+    'envelope.sustain': [0, 1], 'envelope.releaseMs': [1, 3000],
+    'envelope.attackNoise': [0, 1], 'envelope.breathNoise': [0, 0.5],
+    'vibrato.frequencyHz': [0.1, 20], 'vibrato.depthCents': [0, 200],
+    'vibrato.delayMs': [0, 5000], 'vibrato.fadeInMs': [1, 5000],
+    'additive.velocityBrightness': [0, 1], 'additive.breathBrightness': [0, 1],
+    'additive.expressionBrightness': [0, 1], 'additive.pitchBrightness': [0, 1],
+    'exciter.drive': [0.1, 12], 'exciter.asymmetry': [-1, 1], 'exciter.pressure': [0, 1],
+    'exciter.pressureToDrive': [0, 4], 'exciter.noiseAmount': [0, 1],
+    'exciter.transientMs': [0.5, 500],
+    darkTilt: [0, 6], brightTilt: [0, 6], hybridMix: [0, 1], velocityFloor: [0, 1],
+    breathToVolume: [0, 1], expressionToVolume: [0, 1],
+    aftertouchToBrightness: [0, 1], aftertouchToVolume: [0, 1], outputTrimDb: [-24, 12]
+  };
+
+  function sanitiseVoicing(v) {
+    const clamp = (x, lo, hi) => (typeof x !== 'number' || !isFinite(x)) ? lo
+                                 : Math.min(hi, Math.max(lo, x));
+    for (const [path, [lo, hi]] of Object.entries(CLAMPS)) {
+      const parts = path.split('.');
+      const host = parts.length === 1 ? v : v[parts[0]];
+      const key = parts[parts.length - 1];
+      if (host && host[key] !== undefined) host[key] = clamp(host[key], lo, hi);
+    }
+    v.additive.harmonicCount = Math.min(16, Math.max(1, v.additive.harmonicCount | 0));
+    v.additive.harmonicGain = v.additive.harmonicGain.map((g) => clamp(g, 0, 2));
+    v.pitchBendRange = [1, 2, 3, 12].indexOf(v.pitchBendRange) >= 0 ? v.pitchBendRange : 2;
+    v.eq.forEach((b) => {
+      b.frequency = clamp(b.frequency, 20, 20000);
+      b.gainDb = clamp(b.gainDb, -18, 18);
+      b.q = clamp(b.q, 0.1, 10);
+    });
+    v.registerCurve.forEach((pt) => {
+      pt.note = Math.min(127, Math.max(0, pt.note | 0));
+      pt.gainDb = clamp(pt.gainDb, -18, 12);
+      pt.brightness = clamp(pt.brightness, -1, 1);
+    });
+    v.registerCurve.sort((a, b) => a.note - b.note);
+    return v;
+  }
+
   function peakScale(cfg) {
     const z = cfg.speaker.impedance || 8;
     const limit = cfg.speaker.powerLimit || cfg.speaker.powerRms * 0.5 || 1;
@@ -666,6 +744,50 @@ const MOCK = (() => {
         }
         return Promise.resolve({ ok: true });
       }
+      case 'POST /api/audio/preview': {
+        // The mock applies the same clamps the firmware does, so a value the
+        // device would refuse is visibly refused here too.
+        const next = Object.assign(JSON.parse(JSON.stringify(state.liveVoicing)), parsed);
+        sanitiseVoicing(next);
+        state.liveVoicing = next;
+        return Promise.resolve({ ok: true, voicing: next });
+      }
+      case 'POST /api/audio/revert':
+        state.liveVoicing = JSON.parse(JSON.stringify(state.config.voicing));
+        return Promise.resolve({ ok: true });
+      case 'POST /api/audio/commit':
+        state.config.voicing = JSON.parse(JSON.stringify(state.liveVoicing));
+        return Promise.resolve({ ok: true });
+      case 'GET /api/voicings':
+        return Promise.resolve({ ok: true, capacity: 4,
+                                 live: state.liveVoicing, saved: state.config.voicing,
+                                 items: state.config.voicings });
+      case 'POST /api/voicings/save': {
+        if (!parsed.name) return Promise.reject(new Error('a voicing needs a name'));
+        const entry = JSON.parse(JSON.stringify(state.liveVoicing));
+        entry.name = parsed.name;
+        const at = state.config.voicings.findIndex((v) => v.name === parsed.name);
+        if (at >= 0) state.config.voicings[at] = entry;
+        else if (state.config.voicings.length >= 4) {
+          return Promise.reject(new Error('no free voicing slot: delete one first'));
+        } else state.config.voicings.push(entry);
+        state.config.voicing = JSON.parse(JSON.stringify(entry));
+        state.liveVoicing = JSON.parse(JSON.stringify(entry));
+        return Promise.resolve({ ok: true });
+      }
+      case 'POST /api/voicings/load': {
+        const found = state.config.voicings.find((v) => v.name === parsed.name);
+        if (!found) return Promise.reject(new Error('no voicing by that name'));
+        state.liveVoicing = JSON.parse(JSON.stringify(found));
+        return Promise.resolve({ ok: true });
+      }
+      case 'POST /api/voicings/delete': {
+        const at = state.config.voicings.findIndex((v) => v.name === parsed.name);
+        if (at < 0) return Promise.reject(new Error('no voicing by that name'));
+        state.config.voicings.splice(at, 1);
+        return Promise.resolve({ ok: true });
+      }
+
       case 'POST /api/midi/monitor/clear':
         state.monitor.items = [];
         return Promise.resolve({ ok: true });
@@ -722,5 +844,6 @@ const MOCK = (() => {
     }
   }
 
-  return { handle, telemetry, state, defaultConfig, acousticModel };
+  return { handle, telemetry, state, defaultConfig, defaultVoicing,
+           sanitiseVoicing, acousticModel };
 })();

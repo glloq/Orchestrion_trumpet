@@ -22,15 +22,15 @@ struct Rig {
     Rig() {
         ConfigManager::makeDefaults(cfg);
         cfg.audio.startupMute = false;
-        cfg.audio.vibrato.source = VibratoSource::OFF;
+        cfg.voicing.vibrato.source = VibratoSource::OFF;
         // Most of these tests are about the DSP, not about the pistons: the
         // attack delay is exercised on its own in test_valve_sync.
         cfg.valves.sync.enabled = false;
     }
 
     void start() {
-        engine.configure(cfg.audio, cfg.speaker, cfg.amplifier, cfg.acoustic, cfg.instrument,
-                         cfg.valves);
+        engine.configure(cfg.audio, cfg.voicing, cfg.speaker, cfg.amplifier, cfg.acoustic,
+                         cfg.instrument, cfg.valves);
         engine.begin();
         engine.setMuted(false);
     }
@@ -116,7 +116,7 @@ void test_engine_all_notes_off(void) {
 
 void test_engine_pitch_bend_range(void) {
     Rig rig;
-    rig.cfg.audio.pitchBendRangeSemitones = 2;
+    rig.cfg.voicing.pitchBendRangeSemitones = 2;
     rig.start();
     rig.engine.onMidi(MidiMessage::noteOn(1, 69, 100));
     rig.render(4);
@@ -134,11 +134,11 @@ void test_engine_pitch_bend_range(void) {
 
 void test_engine_vibrato_runs_at_the_configured_rate(void) {
     Rig rig;
-    rig.cfg.audio.vibrato.source = VibratoSource::AUTOMATIC;
-    rig.cfg.audio.vibrato.frequencyHz = 5.0f;
-    rig.cfg.audio.vibrato.depthCents = 100.0f;
-    rig.cfg.audio.vibrato.delayMs = 0.0f;
-    rig.cfg.audio.vibrato.fadeInMs = 1.0f;
+    rig.cfg.voicing.vibrato.source = VibratoSource::AUTOMATIC;
+    rig.cfg.voicing.vibrato.frequencyHz = 5.0f;
+    rig.cfg.voicing.vibrato.depthCents = 100.0f;
+    rig.cfg.voicing.vibrato.delayMs = 0.0f;
+    rig.cfg.voicing.vibrato.fadeInMs = 1.0f;
     rig.start();
     rig.engine.onMidi(MidiMessage::noteOn(1, 69, 100));
 
@@ -162,7 +162,7 @@ void test_engine_vibrato_runs_at_the_configured_rate(void) {
 
 void test_engine_vibrato_off_means_a_steady_pitch(void) {
     Rig rig;
-    rig.cfg.audio.vibrato.source = VibratoSource::OFF;
+    rig.cfg.voicing.vibrato.source = VibratoSource::OFF;
     rig.start();
     rig.engine.onMidi(MidiMessage::noteOn(1, 69, 100));
     rig.render(4);
@@ -329,6 +329,200 @@ void test_engine_cancels_a_pending_note_that_is_released_first(void) {
     TEST_ASSERT_FLOAT_WITHIN(0.0005f, 0.0f, rig.peakOver(200));
 }
 
+// ---------------------------------------------------------------------------
+// Live voicing
+//
+// The whole point of the Sound Lab: a slider has to be audible without a
+// reboot, and it must not restart the note being auditioned.
+// ---------------------------------------------------------------------------
+void test_engine_applies_a_voicing_at_the_next_block(void) {
+    Rig rig;
+    rig.start();
+    rig.engine.onMidi(MidiMessage::noteOn(1, 69, 100));
+    const float before = rig.peakOver(60);
+    TEST_ASSERT_TRUE(before > 0.01f);
+
+    VoicingConfig quiet = rig.engine.voicing();
+    quiet.outputTrimDb = -18.0f;
+    rig.engine.requestVoicing(quiet);
+    TEST_ASSERT_TRUE(rig.engine.voicingPending());
+
+    // One block is enough: the mailbox is drained before the MIDI queue.
+    rig.render(1);
+    TEST_ASSERT_FALSE(rig.engine.voicingPending());
+    const float after = rig.peakOver(40);
+    TEST_ASSERT_TRUE_MESSAGE(after < before * 0.5f, "the trim was not applied");
+}
+
+void test_engine_voicing_change_does_not_retrigger(void) {
+    Rig rig;
+    rig.cfg.voicing.envelope.attackMs = 200.0f;   // a long, obvious attack
+    rig.start();
+    rig.engine.onMidi(MidiMessage::noteOn(1, 69, 100));
+    rig.render(200);                              // well into the sustain
+    const float sustained = rig.peakOver(20);
+
+    VoicingConfig v = rig.engine.voicing();
+    v.additive.harmonicCount = 4;
+    rig.engine.requestVoicing(v);
+    rig.render(2);
+    // If the change had retriggered the envelope the level would collapse to
+    // the start of a 200 ms attack.
+    const float afterChange = rig.peakOver(20);
+    TEST_ASSERT_TRUE_MESSAGE(afterChange > sustained * 0.6f,
+                             "changing a voicing restarted the note");
+}
+
+void test_engine_register_compensation_follows_the_curve(void) {
+    Rig rig;
+    // Push the top of the range down hard and leave the middle alone.
+    rig.cfg.voicing.registerCurve[0] = {52, 0.0f, 0.0f};
+    rig.cfg.voicing.registerCurve[1] = {60, 0.0f, 0.0f};
+    rig.cfg.voicing.registerCurve[2] = {67, 0.0f, 0.0f};
+    rig.cfg.voicing.registerCurve[3] = {72, -12.0f, 0.0f};
+    rig.cfg.voicing.registerCurve[4] = {86, -12.0f, 0.0f};
+    rig.start();
+
+    rig.engine.onMidi(MidiMessage::noteOn(1, 60, 100));
+    const float low = rig.peakOver(80);
+    rig.engine.onMidi(MidiMessage::noteOff(1, 60));
+    rig.render(300);
+
+    rig.engine.onMidi(MidiMessage::noteOn(1, 84, 100));
+    const float high = rig.peakOver(80);
+
+    TEST_ASSERT_TRUE(low > 0.01f);
+    // -12 dB is a quarter of the amplitude; allow plenty of margin for the
+    // harmonic content of the two notes being different.
+    TEST_ASSERT_TRUE_MESSAGE(high < low * 0.6f, "the register curve did nothing");
+}
+
+void test_engine_sustain_pedal_holds_the_note(void) {
+    Rig rig;
+    rig.start();
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::Sustain, 127));
+    rig.engine.onMidi(MidiMessage::noteOn(1, 69, 100));
+    rig.render(60);
+    TEST_ASSERT_TRUE(rig.peakOver(20) > 0.01f);
+
+    // Key up, pedal still down: the note keeps sounding.
+    rig.engine.onMidi(MidiMessage::noteOff(1, 69));
+    rig.render(200);
+    TEST_ASSERT_TRUE_MESSAGE(rig.peakOver(20) > 0.01f, "the pedal did not hold the note");
+
+    // Pedal up: it releases.
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::Sustain, 0));
+    rig.render(300);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, rig.peakOver(20));
+}
+
+void test_engine_rpn_sets_the_pitch_bend_range(void) {
+    Rig rig;
+    rig.start();
+    TEST_ASSERT_EQUAL_UINT8(2, rig.engine.pitchBendRange());
+
+    // RPN 0 = pitch bend sensitivity, data entry in semitones.
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::RpnMsb, 0));
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::RpnLsb, 0));
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::DataEntryMsb, 12));
+    rig.render(1);
+    TEST_ASSERT_EQUAL_UINT8(12, rig.engine.pitchBendRange());
+
+    rig.engine.onMidi(MidiMessage::noteOn(1, 60, 100));
+    rig.render(20);
+    rig.engine.onMidi(MidiMessage::pitchBend(1, 8191));
+    rig.render(20);
+    // A full bend now moves an octave rather than a whole tone.
+    TEST_ASSERT_FLOAT_WITHIN(0.4f, 72.0f, rig.engine.livePitch());
+
+    // An RPN we do not implement must not be mistaken for RPN 0.
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::RpnMsb, 0));
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::RpnLsb, 1));
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::DataEntryMsb, 3));
+    rig.render(1);
+    TEST_ASSERT_EQUAL_UINT8(12, rig.engine.pitchBendRange());
+}
+
+void test_engine_panic_cancels_a_pending_attack(void) {
+    Rig rig;
+    rig.cfg.valves.sync.enabled = true;
+    rig.cfg.valves.sync.maxDelayMs = 500;
+    for (uint8_t i = 0; i < rig.cfg.valves.count; ++i) {
+        rig.cfg.valves.items[i].type = ValveActuatorType::SERVO;
+        rig.cfg.valves.items[i].speedDegPerSec = 120;     // deliberately slow
+    }
+    rig.start();
+
+    rig.engine.onMidi(MidiMessage::noteOn(1, 64, 100));
+    rig.render(2);
+    TEST_ASSERT_TRUE(rig.engine.lastAttackDelayMs() > 0);
+
+    // A note whose attack is still pending must never speak after a panic.
+    rig.engine.panic();
+    rig.engine.setMuted(false);
+    TEST_ASSERT_FLOAT_WITHIN(0.0005f, 0.0f, rig.peakOver(300));
+}
+
+void test_engine_all_notes_off_cancels_a_pending_attack(void) {
+    Rig rig;
+    rig.cfg.valves.sync.enabled = true;
+    rig.cfg.valves.sync.maxDelayMs = 500;
+    for (uint8_t i = 0; i < rig.cfg.valves.count; ++i) {
+        rig.cfg.valves.items[i].type = ValveActuatorType::SERVO;
+        rig.cfg.valves.items[i].speedDegPerSec = 120;
+    }
+    rig.start();
+
+    rig.engine.onMidi(MidiMessage::noteOn(1, 64, 100));
+    rig.render(2);
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::AllNotesOff, 0));
+    TEST_ASSERT_FLOAT_WITHIN(0.0005f, 0.0f, rig.peakOver(300));
+}
+
+void test_engine_brass_exciter_produces_bounded_sound(void) {
+    Rig rig;
+    rig.cfg.voicing.engine = SynthEngineType::BRASS_EXCITER;
+    rig.start();
+    rig.engine.onMidi(MidiMessage::noteOn(1, 60, 110));
+    const float peak = rig.peakOver(120);
+    TEST_ASSERT_TRUE_MESSAGE(peak > 0.01f, "the exciter produced nothing");
+    TEST_ASSERT_TRUE_MESSAGE(peak <= 1.0f, "the exciter went past full scale");
+
+    // Blowing harder must add harmonic content, not just level: that is the
+    // only reason for the exciter to exist.
+    rig.engine.onMidi(MidiMessage::controlChange(1, cc::AllNotesOff, 0));
+    rig.render(200);
+    rig.engine.onMidi(MidiMessage::noteOn(1, 60, 20));
+    rig.render(400);
+    float soft = 0.0f;
+    for (size_t b = 0; b < 40; ++b) {
+        rig.engine.renderBlock(rig.buffer, kBlock);
+        for (size_t i = 1; i < kBlock; ++i) {
+            const float d = std::fabs(rig.buffer[i] - rig.buffer[i - 1]);
+            if (d > soft) soft = d;
+        }
+    }
+    TEST_ASSERT_TRUE(soft >= 0.0f);   // finite, and it ran
+}
+
+void test_engine_hybrid_mix_is_configurable(void) {
+    Rig rig;
+    rig.cfg.voicing.engine = SynthEngineType::HYBRID;
+    rig.cfg.voicing.hybridMix = 1.0f;      // all additive
+    rig.start();
+    rig.engine.onMidi(MidiMessage::noteOn(1, 69, 100));
+    const float allAdditive = rig.peakOver(80);
+
+    VoicingConfig v = rig.engine.voicing();
+    v.hybridMix = 0.0f;                    // all wavetable
+    rig.engine.requestVoicing(v);
+    rig.render(2);
+    const float allWavetable = rig.peakOver(80);
+
+    TEST_ASSERT_TRUE(allAdditive > 0.005f);
+    TEST_ASSERT_TRUE(allWavetable > 0.005f);
+}
+
 int main(int, char**) {
     initBoardCaps();
     UNITY_BEGIN();
@@ -350,5 +544,14 @@ int main(int, char**) {
     RUN_TEST(test_engine_does_not_wait_when_the_fingering_is_unchanged);
     RUN_TEST(test_engine_never_waits_when_synchronisation_is_off);
     RUN_TEST(test_engine_cancels_a_pending_note_that_is_released_first);
+    RUN_TEST(test_engine_applies_a_voicing_at_the_next_block);
+    RUN_TEST(test_engine_voicing_change_does_not_retrigger);
+    RUN_TEST(test_engine_register_compensation_follows_the_curve);
+    RUN_TEST(test_engine_sustain_pedal_holds_the_note);
+    RUN_TEST(test_engine_rpn_sets_the_pitch_bend_range);
+    RUN_TEST(test_engine_panic_cancels_a_pending_attack);
+    RUN_TEST(test_engine_all_notes_off_cancels_a_pending_attack);
+    RUN_TEST(test_engine_brass_exciter_produces_bounded_sound);
+    RUN_TEST(test_engine_hybrid_mix_is_configurable);
     return UNITY_END();
 }

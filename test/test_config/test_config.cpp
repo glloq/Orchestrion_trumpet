@@ -71,8 +71,8 @@ void test_round_trip_preserves_values(void) {
     InstrumentConfiguration original;
     ConfigManager::makeDefaults(original);
     original.audio.sampleRate = 44100;
-    original.audio.engine = SynthEngineType::WAVETABLE;
-    original.audio.envelope.attackMs = 7.5f;
+    original.voicing.engine = SynthEngineType::WAVETABLE;
+    original.voicing.envelope.attackMs = 7.5f;
     original.instrument.notePriority = NotePriority::HIGHEST;
     original.valves.count = 4;
     original.valves.items[2].type = ValveActuatorType::SOLENOID;
@@ -90,8 +90,8 @@ void test_round_trip_preserves_values(void) {
     TEST_ASSERT_TRUE(deserializeConfig(buffer, length, restored));
 
     TEST_ASSERT_EQUAL_UINT32(44100, restored.audio.sampleRate);
-    TEST_ASSERT_EQUAL(SynthEngineType::WAVETABLE, restored.audio.engine);
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 7.5f, restored.audio.envelope.attackMs);
+    TEST_ASSERT_EQUAL(SynthEngineType::WAVETABLE, restored.voicing.engine);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 7.5f, restored.voicing.envelope.attackMs);
     TEST_ASSERT_EQUAL(NotePriority::HIGHEST, restored.instrument.notePriority);
     TEST_ASSERT_EQUAL_UINT8(4, restored.valves.count);
     TEST_ASSERT_EQUAL(ValveActuatorType::SOLENOID, restored.valves.items[2].type);
@@ -112,7 +112,7 @@ void test_missing_fields_keep_their_default(void) {
     // Untouched members must equal the factory value, not zero.
     TEST_ASSERT_EQUAL_UINT8(3, cfg.valves.count);
     TEST_ASSERT_EQUAL(AudioBackendType::PCM5102A, cfg.audio.backend);
-    TEST_ASSERT_EQUAL_UINT8(2, cfg.audio.pitchBendRangeSemitones);
+    TEST_ASSERT_EQUAL_UINT8(2, cfg.voicing.pitchBendRangeSemitones);
 }
 
 void test_unknown_fields_are_ignored(void) {
@@ -450,6 +450,136 @@ void test_standard_preset_is_the_reference_chain(void) {
     TEST_ASSERT_EQUAL(AcousticCouplingType::SEALED_CHAMBER, cfg.acoustic.coupling);
 }
 
+// ---------------------------------------------------------------------------
+// Voicing: the live path's guard rail
+// ---------------------------------------------------------------------------
+void test_voicing_sanitiser_rejects_nonsense(void) {
+    VoicingConfig v;
+    const float nan = 0.0f / (v.darkTilt - v.darkTilt);   // NaN without <cmath>
+    v.envelope.attackMs = -50.0f;
+    v.envelope.sustain = 9.0f;
+    v.vibrato.frequencyHz = nan;
+    v.additive.harmonicCount = 200;
+    v.additive.harmonicGain[3] = nan;
+    v.darkTilt = 900.0f;
+    v.hybridMix = -4.0f;
+    v.outputTrimDb = 400.0f;
+    v.eq[0].frequency = 0.0f;
+    v.eq[0].gainDb = 200.0f;
+    v.eq[0].q = 0.0f;
+    v.pitchBendRangeSemitones = 0;
+    v.engine = static_cast<SynthEngineType>(99);
+
+    ConfigValidator::sanitiseVoicing(v);
+
+    TEST_ASSERT_TRUE(v.envelope.attackMs >= 0.5f);
+    TEST_ASSERT_TRUE(v.envelope.sustain <= 1.0f);
+    TEST_ASSERT_TRUE(v.vibrato.frequencyHz == v.vibrato.frequencyHz);   // not NaN
+    TEST_ASSERT_TRUE(v.vibrato.frequencyHz >= 0.1f);
+    TEST_ASSERT_EQUAL_UINT8(kMaxHarmonics, v.additive.harmonicCount);
+    TEST_ASSERT_TRUE(v.additive.harmonicGain[3] == v.additive.harmonicGain[3]);
+    TEST_ASSERT_TRUE(v.darkTilt <= 6.0f);
+    TEST_ASSERT_TRUE(v.hybridMix >= 0.0f && v.hybridMix <= 1.0f);
+    // The trim sits before the limiter, but it still may not be turned into a
+    // 400 dB shove that leaves the protection stage as the only thing left.
+    TEST_ASSERT_TRUE(v.outputTrimDb <= 12.0f);
+    TEST_ASSERT_TRUE(v.eq[0].frequency >= 20.0f);
+    TEST_ASSERT_TRUE(v.eq[0].gainDb <= 18.0f);
+    TEST_ASSERT_TRUE(v.eq[0].q >= 0.1f);
+    TEST_ASSERT_EQUAL_UINT8(2, v.pitchBendRangeSemitones);
+    TEST_ASSERT_EQUAL(SynthEngineType::ADDITIVE, v.engine);
+}
+
+void test_voicing_sanitiser_sorts_the_register_curve(void) {
+    VoicingConfig v;
+    v.registerCurve[0] = {90, -3.0f, 0.0f};
+    v.registerCurve[1] = {40, 0.0f, 0.0f};
+    v.registerCurve[2] = {70, 0.0f, 0.0f};
+    v.registerCurve[3] = {50, 0.0f, 0.0f};
+    v.registerCurve[4] = {60, 0.0f, 0.0f};
+    ConfigValidator::sanitiseVoicing(v);
+    // The curve is walked in order; an unsorted one silently skips points.
+    for (uint8_t i = 1; i < kRegisterPoints; ++i) {
+        TEST_ASSERT_TRUE(v.registerCurve[i].note >= v.registerCurve[i - 1].note);
+    }
+    TEST_ASSERT_EQUAL_UINT8(40, v.registerCurve[0].note);
+    TEST_ASSERT_EQUAL_UINT8(90, v.registerCurve[kRegisterPoints - 1].note);
+}
+
+void test_voicing_round_trip(void) {
+    InstrumentConfiguration original;
+    ConfigManager::makeDefaults(original);
+    copyString(original.voicing.name, kNameLen, "Prototype 07");
+    original.voicing.engine = SynthEngineType::BRASS_EXCITER;
+    original.voicing.darkTilt = 3.1f;
+    original.voicing.hybridMix = 0.25f;
+    original.voicing.additive.harmonicGain[6] = 0.137f;
+    original.voicing.eq[4].enabled = true;
+    original.voicing.eq[4].gainDb = -4.5f;
+    original.voicing.registerCurve[3] = {74, -2.5f, 0.3f};
+    original.voicing.exciter.asymmetry = -0.4f;
+    original.voicings.count = 1;
+    original.voicings.items[0] = original.voicing;
+    copyString(original.voicings.items[0].name, kNameLen, "Bright");
+
+    static char buffer[16384];
+    const size_t length = serializeConfig(original, buffer, sizeof(buffer));
+    TEST_ASSERT_GREATER_THAN(400, length);
+
+    InstrumentConfiguration restored;
+    TEST_ASSERT_TRUE(deserializeConfig(buffer, length, restored));
+
+    TEST_ASSERT_EQUAL_STRING("Prototype 07", restored.voicing.name);
+    TEST_ASSERT_EQUAL(SynthEngineType::BRASS_EXCITER, restored.voicing.engine);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 3.1f, restored.voicing.darkTilt);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.25f, restored.voicing.hybridMix);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.137f, restored.voicing.additive.harmonicGain[6]);
+    TEST_ASSERT_TRUE(restored.voicing.eq[4].enabled);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, -4.5f, restored.voicing.eq[4].gainDb);
+    TEST_ASSERT_EQUAL_UINT8(74, restored.voicing.registerCurve[3].note);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.3f, restored.voicing.registerCurve[3].brightness);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, -0.4f, restored.voicing.exciter.asymmetry);
+    TEST_ASSERT_EQUAL_UINT8(1, restored.voicings.count);
+    TEST_ASSERT_EQUAL_STRING("Bright", restored.voicings.items[0].name);
+}
+
+void test_migration_v3_moves_the_sound_into_the_voicing(void) {
+    // A v3 file kept the sound inside `audio`. Migrating must carry it across
+    // rather than resetting the instrument to the factory voice.
+    const char* json =
+        "{\"schemaVersion\":3,\"audio\":{\"sampleRate\":48000,\"engine\":\"WAVETABLE\","
+        "\"pitchBendRange\":12,"
+        "\"envelope\":{\"attackMs\":33.0,\"breathNoise\":0.07},"
+        "\"vibrato\":{\"frequencyHz\":6.5},"
+        "\"additive\":{\"harmonicCount\":7},"
+        "\"eq\":[{\"frequency\":250.0,\"gainDb\":-3.0,\"q\":1.0,\"enabled\":true}]}}";
+    InstrumentConfiguration cfg;
+    TEST_ASSERT_TRUE(deserializeConfig(json, strlen(json), cfg));
+
+    TEST_ASSERT_EQUAL_UINT16(kConfigSchemaVersion, cfg.schemaVersion);
+    TEST_ASSERT_EQUAL(SynthEngineType::WAVETABLE, cfg.voicing.engine);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 33.0f, cfg.voicing.envelope.attackMs);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.07f, cfg.voicing.envelope.breathNoise);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 6.5f, cfg.voicing.vibrato.frequencyHz);
+    TEST_ASSERT_EQUAL_UINT8(7, cfg.voicing.additive.harmonicCount);
+    TEST_ASSERT_EQUAL_UINT8(12, cfg.voicing.pitchBendRangeSemitones);
+    TEST_ASSERT_TRUE(cfg.voicing.eq[0].enabled);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, -3.0f, cfg.voicing.eq[0].gainDb);
+
+    // The three bands a v3 file never had come up usable, not at 0 Hz.
+    for (uint8_t i = 3; i < kMaxEqBands; ++i) {
+        TEST_ASSERT_TRUE(cfg.voicing.eq[i].frequency >= 20.0f);
+        TEST_ASSERT_FALSE(cfg.voicing.eq[i].enabled);
+    }
+    // And the constants that used to be compiled in are now the stored values,
+    // so a migrated instrument sounds exactly as it did.
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 2.6f, cfg.voicing.darkTilt);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.6f, cfg.voicing.brightTilt);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.6f, cfg.voicing.hybridMix);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.25f, cfg.voicing.velocityFloor);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.25f, cfg.voicing.aftertouchToBrightness);
+}
+
 int main(int, char**) {
     initBoardCaps();
     UNITY_BEGIN();
@@ -478,5 +608,9 @@ int main(int, char**) {
     RUN_TEST(test_sanitise_repairs_a_dangerous_file);
     RUN_TEST(test_presets_produce_valid_configurations);
     RUN_TEST(test_standard_preset_is_the_reference_chain);
+    RUN_TEST(test_voicing_sanitiser_rejects_nonsense);
+    RUN_TEST(test_voicing_sanitiser_sorts_the_register_curve);
+    RUN_TEST(test_voicing_round_trip);
+    RUN_TEST(test_migration_v3_moves_the_sound_into_the_voicing);
     return UNITY_END();
 }

@@ -45,6 +45,145 @@ void writeHornStage(JsonObject o, const HornStageConfig& h) {
     o["lengthMm"] = h.lengthMm;
 }
 
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Voicing.  Written as its own object, and read from either its own object or
+// - for a v3 file - from inside `audio`, where the sound used to live.
+// ---------------------------------------------------------------------------
+void writeVoicing(JsonObject o, const VoicingConfig& v) {
+    o["name"] = v.name;
+    o["engine"] = toString(v.engine);
+    o["pitchBendRange"] = v.pitchBendRangeSemitones;
+    o["darkTilt"] = v.darkTilt;
+    o["brightTilt"] = v.brightTilt;
+    o["hybridMix"] = v.hybridMix;
+    o["velocityFloor"] = v.velocityFloor;
+    o["breathToVolume"] = v.breathToVolume;
+    o["expressionToVolume"] = v.expressionToVolume;
+    o["aftertouchToBrightness"] = v.aftertouchToBrightness;
+    o["aftertouchToVolume"] = v.aftertouchToVolume;
+    o["outputTrimDb"] = v.outputTrimDb;
+
+    JsonObject env = o["envelope"].to<JsonObject>();
+    env["attackMs"] = v.envelope.attackMs;
+    env["decayMs"] = v.envelope.decayMs;
+    env["sustain"] = v.envelope.sustain;
+    env["releaseMs"] = v.envelope.releaseMs;
+    env["attackNoise"] = v.envelope.attackNoise;
+    env["breathNoise"] = v.envelope.breathNoise;
+
+    JsonObject vib = o["vibrato"].to<JsonObject>();
+    vib["source"] = toString(v.vibrato.source);
+    vib["frequencyHz"] = v.vibrato.frequencyHz;
+    vib["depthCents"] = v.vibrato.depthCents;
+    vib["delayMs"] = v.vibrato.delayMs;
+    vib["fadeInMs"] = v.vibrato.fadeInMs;
+
+    JsonObject add = o["additive"].to<JsonObject>();
+    add["harmonicCount"] = v.additive.harmonicCount;
+    JsonArray gains = add["harmonicGain"].to<JsonArray>();
+    for (uint8_t i = 0; i < kMaxHarmonics; ++i) gains.add(v.additive.harmonicGain[i]);
+    add["velocityBrightness"] = v.additive.velocityBrightness;
+    add["breathBrightness"] = v.additive.breathBrightness;
+    add["expressionBrightness"] = v.additive.expressionBrightness;
+    add["pitchBrightness"] = v.additive.pitchBrightness;
+
+    JsonObject ex = o["exciter"].to<JsonObject>();
+    ex["drive"] = v.exciter.drive;
+    ex["asymmetry"] = v.exciter.asymmetry;
+    ex["pressure"] = v.exciter.pressure;
+    ex["pressureToDrive"] = v.exciter.pressureToDrive;
+    ex["noiseAmount"] = v.exciter.noiseAmount;
+    ex["transientMs"] = v.exciter.transientMs;
+
+    JsonArray eq = o["eq"].to<JsonArray>();
+    for (uint8_t i = 0; i < kMaxEqBands; ++i) {
+        JsonObject b = eq.add<JsonObject>();
+        b["frequency"] = v.eq[i].frequency;
+        b["gainDb"] = v.eq[i].gainDb;
+        b["q"] = v.eq[i].q;
+        b["enabled"] = v.eq[i].enabled;
+    }
+
+    JsonArray reg = o["registerCurve"].to<JsonArray>();
+    for (uint8_t i = 0; i < kRegisterPoints; ++i) {
+        JsonObject b = reg.add<JsonObject>();
+        b["note"] = v.registerCurve[i].note;
+        b["gainDb"] = v.registerCurve[i].gainDb;
+        b["brightness"] = v.registerCurve[i].brightness;
+    }
+}
+
+void readVoicing(JsonObjectConst o, VoicingConfig& v) {
+    if (o.isNull()) return;
+    readString(o["name"], v.name, sizeof(v.name));
+    readEnum(o["engine"], v.engine);
+    readNumber(o["pitchBendRange"], v.pitchBendRangeSemitones);
+    readNumber(o["darkTilt"], v.darkTilt);
+    readNumber(o["brightTilt"], v.brightTilt);
+    readNumber(o["hybridMix"], v.hybridMix);
+    readNumber(o["velocityFloor"], v.velocityFloor);
+    readNumber(o["breathToVolume"], v.breathToVolume);
+    readNumber(o["expressionToVolume"], v.expressionToVolume);
+    readNumber(o["aftertouchToBrightness"], v.aftertouchToBrightness);
+    readNumber(o["aftertouchToVolume"], v.aftertouchToVolume);
+    readNumber(o["outputTrimDb"], v.outputTrimDb);
+
+    JsonObjectConst env = o["envelope"];
+    readNumber(env["attackMs"], v.envelope.attackMs);
+    readNumber(env["decayMs"], v.envelope.decayMs);
+    readNumber(env["sustain"], v.envelope.sustain);
+    readNumber(env["releaseMs"], v.envelope.releaseMs);
+    readNumber(env["attackNoise"], v.envelope.attackNoise);
+    readNumber(env["breathNoise"], v.envelope.breathNoise);
+
+    JsonObjectConst vib = o["vibrato"];
+    readEnum(vib["source"], v.vibrato.source);
+    readNumber(vib["frequencyHz"], v.vibrato.frequencyHz);
+    readNumber(vib["depthCents"], v.vibrato.depthCents);
+    readNumber(vib["delayMs"], v.vibrato.delayMs);
+    readNumber(vib["fadeInMs"], v.vibrato.fadeInMs);
+
+    JsonObjectConst add = o["additive"];
+    readNumber(add["harmonicCount"], v.additive.harmonicCount);
+    JsonArrayConst gains = add["harmonicGain"];
+    for (uint8_t i = 0; i < kMaxHarmonics && i < gains.size(); ++i) {
+        readNumber(gains[i], v.additive.harmonicGain[i]);
+    }
+    readNumber(add["velocityBrightness"], v.additive.velocityBrightness);
+    readNumber(add["breathBrightness"], v.additive.breathBrightness);
+    readNumber(add["expressionBrightness"], v.additive.expressionBrightness);
+    readNumber(add["pitchBrightness"], v.additive.pitchBrightness);
+
+    JsonObjectConst ex = o["exciter"];
+    readNumber(ex["drive"], v.exciter.drive);
+    readNumber(ex["asymmetry"], v.exciter.asymmetry);
+    readNumber(ex["pressure"], v.exciter.pressure);
+    readNumber(ex["pressureToDrive"], v.exciter.pressureToDrive);
+    readNumber(ex["noiseAmount"], v.exciter.noiseAmount);
+    readNumber(ex["transientMs"], v.exciter.transientMs);
+
+    JsonArrayConst eq = o["eq"];
+    for (uint8_t i = 0; i < kMaxEqBands && i < eq.size(); ++i) {
+        JsonObjectConst b = eq[i];
+        readNumber(b["frequency"], v.eq[i].frequency);
+        readNumber(b["gainDb"], v.eq[i].gainDb);
+        readNumber(b["q"], v.eq[i].q);
+        readBool(b["enabled"], v.eq[i].enabled);
+    }
+
+    JsonArrayConst reg = o["registerCurve"];
+    for (uint8_t i = 0; i < kRegisterPoints && i < reg.size(); ++i) {
+        JsonObjectConst b = reg[i];
+        readNumber(b["note"], v.registerCurve[i].note);
+        readNumber(b["gainDb"], v.registerCurve[i].gainDb);
+        readNumber(b["brightness"], v.registerCurve[i].brightness);
+    }
+}
+
+namespace {
+
 void readI2s(JsonObjectConst o, I2sPins& p) {
     if (o.isNull()) return;
     readNumber(o["bclk"], p.bclk);
@@ -111,8 +250,7 @@ void configToJson(const InstrumentConfiguration& cfg, JsonObject root, SecretPol
     audio["blockSize"] = cfg.audio.blockSize;
     audio["dmaBuffers"] = cfg.audio.dmaBuffers;
     audio["masterVolume"] = cfg.audio.masterVolume;
-    audio["engine"] = toString(cfg.audio.engine);
-    audio["pitchBendRange"] = cfg.audio.pitchBendRangeSemitones;
+    audio["programChangeSelectsVoicing"] = cfg.audio.programChangeSelectsVoicing;
     audio["codecAddress"] = cfg.audio.codecAddress;
     audio["sdModePin"] = cfg.audio.sdModePin;
     audio["internalDacChannel"] = cfg.audio.internalDacChannel;
@@ -121,38 +259,11 @@ void configToJson(const InstrumentConfiguration& cfg, JsonObject root, SecretPol
     writeI2s(audio["i2s"].to<JsonObject>(), cfg.audio.i2s);
     writeI2c(audio["i2c"].to<JsonObject>(), cfg.audio.i2c);
 
-    JsonArray eq = audio["eq"].to<JsonArray>();
-    for (uint8_t i = 0; i < kMaxEqBands; ++i) {
-        JsonObject b = eq.add<JsonObject>();
-        b["frequency"] = cfg.audio.eq[i].frequency;
-        b["gainDb"] = cfg.audio.eq[i].gainDb;
-        b["q"] = cfg.audio.eq[i].q;
-        b["enabled"] = cfg.audio.eq[i].enabled;
+    writeVoicing(root["voicing"].to<JsonObject>(), cfg.voicing);
+    JsonArray voicings = root["voicings"].to<JsonArray>();
+    for (uint8_t i = 0; i < cfg.voicings.count && i < kMaxVoicings; ++i) {
+        writeVoicing(voicings.add<JsonObject>(), cfg.voicings.items[i]);
     }
-
-    JsonObject env = audio["envelope"].to<JsonObject>();
-    env["attackMs"] = cfg.audio.envelope.attackMs;
-    env["decayMs"] = cfg.audio.envelope.decayMs;
-    env["sustain"] = cfg.audio.envelope.sustain;
-    env["releaseMs"] = cfg.audio.envelope.releaseMs;
-    env["attackNoise"] = cfg.audio.envelope.attackNoise;
-    env["breathNoise"] = cfg.audio.envelope.breathNoise;
-
-    JsonObject vib = audio["vibrato"].to<JsonObject>();
-    vib["source"] = toString(cfg.audio.vibrato.source);
-    vib["frequencyHz"] = cfg.audio.vibrato.frequencyHz;
-    vib["depthCents"] = cfg.audio.vibrato.depthCents;
-    vib["delayMs"] = cfg.audio.vibrato.delayMs;
-    vib["fadeInMs"] = cfg.audio.vibrato.fadeInMs;
-
-    JsonObject add = audio["additive"].to<JsonObject>();
-    add["harmonicCount"] = cfg.audio.additive.harmonicCount;
-    JsonArray gains = add["harmonicGain"].to<JsonArray>();
-    for (uint8_t i = 0; i < kMaxHarmonics; ++i) gains.add(cfg.audio.additive.harmonicGain[i]);
-    add["velocityBrightness"] = cfg.audio.additive.velocityBrightness;
-    add["breathBrightness"] = cfg.audio.additive.breathBrightness;
-    add["expressionBrightness"] = cfg.audio.additive.expressionBrightness;
-    add["pitchBrightness"] = cfg.audio.additive.pitchBrightness;
 
     JsonObject lim = audio["limiter"].to<JsonObject>();
     lim["enabled"] = cfg.audio.limiter.enabled;
@@ -325,8 +436,7 @@ bool configFromJson(JsonObjectConst root, InstrumentConfiguration& cfg) {
     readNumber(audio["blockSize"], cfg.audio.blockSize);
     readNumber(audio["dmaBuffers"], cfg.audio.dmaBuffers);
     readNumber(audio["masterVolume"], cfg.audio.masterVolume);
-    readEnum(audio["engine"], cfg.audio.engine);
-    readNumber(audio["pitchBendRange"], cfg.audio.pitchBendRangeSemitones);
+    readBool(audio["programChangeSelectsVoicing"], cfg.audio.programChangeSelectsVoicing);
     readNumber(audio["codecAddress"], cfg.audio.codecAddress);
     readNumber(audio["sdModePin"], cfg.audio.sdModePin);
     readNumber(audio["internalDacChannel"], cfg.audio.internalDacChannel);
@@ -335,40 +445,18 @@ bool configFromJson(JsonObjectConst root, InstrumentConfiguration& cfg) {
     readI2s(audio["i2s"], cfg.audio.i2s);
     readI2c(audio["i2c"], cfg.audio.i2c);
 
-    JsonArrayConst eq = audio["eq"];
-    for (uint8_t i = 0; i < kMaxEqBands && i < eq.size(); ++i) {
-        JsonObjectConst b = eq[i];
-        readNumber(b["frequency"], cfg.audio.eq[i].frequency);
-        readNumber(b["gainDb"], cfg.audio.eq[i].gainDb);
-        readNumber(b["q"], cfg.audio.eq[i].q);
-        readBool(b["enabled"], cfg.audio.eq[i].enabled);
+    // v3 files kept the sound inside `audio`. Read it from there first so an
+    // existing instrument keeps its voicing, then let a v4 `voicing` object
+    // override it.
+    readVoicing(audio, cfg.voicing);
+    readVoicing(root["voicing"], cfg.voicing);
+    JsonArrayConst voicings = root["voicings"];
+    cfg.voicings.count = 0;
+    for (uint8_t i = 0; i < kMaxVoicings && i < voicings.size(); ++i) {
+        cfg.voicings.items[i] = VoicingConfig();
+        readVoicing(voicings[i], cfg.voicings.items[i]);
+        cfg.voicings.count = static_cast<uint8_t>(i + 1);
     }
-
-    JsonObjectConst env = audio["envelope"];
-    readNumber(env["attackMs"], cfg.audio.envelope.attackMs);
-    readNumber(env["decayMs"], cfg.audio.envelope.decayMs);
-    readNumber(env["sustain"], cfg.audio.envelope.sustain);
-    readNumber(env["releaseMs"], cfg.audio.envelope.releaseMs);
-    readNumber(env["attackNoise"], cfg.audio.envelope.attackNoise);
-    readNumber(env["breathNoise"], cfg.audio.envelope.breathNoise);
-
-    JsonObjectConst vib = audio["vibrato"];
-    readEnum(vib["source"], cfg.audio.vibrato.source);
-    readNumber(vib["frequencyHz"], cfg.audio.vibrato.frequencyHz);
-    readNumber(vib["depthCents"], cfg.audio.vibrato.depthCents);
-    readNumber(vib["delayMs"], cfg.audio.vibrato.delayMs);
-    readNumber(vib["fadeInMs"], cfg.audio.vibrato.fadeInMs);
-
-    JsonObjectConst add = audio["additive"];
-    readNumber(add["harmonicCount"], cfg.audio.additive.harmonicCount);
-    JsonArrayConst gains = add["harmonicGain"];
-    for (uint8_t i = 0; i < kMaxHarmonics && i < gains.size(); ++i) {
-        readNumber(gains[i], cfg.audio.additive.harmonicGain[i]);
-    }
-    readNumber(add["velocityBrightness"], cfg.audio.additive.velocityBrightness);
-    readNumber(add["breathBrightness"], cfg.audio.additive.breathBrightness);
-    readNumber(add["expressionBrightness"], cfg.audio.additive.expressionBrightness);
-    readNumber(add["pitchBrightness"], cfg.audio.additive.pitchBrightness);
 
     JsonObjectConst lim = audio["limiter"];
     readBool(lim["enabled"], cfg.audio.limiter.enabled);

@@ -14,12 +14,19 @@ namespace ot {
 
 // Current on-disk schema.  Bump it and add a step in ConfigMigration whenever
 // the meaning of an existing field changes.
-static constexpr uint16_t kConfigSchemaVersion = 3;
+static constexpr uint16_t kConfigSchemaVersion = 4;
 
 static constexpr uint8_t kMaxValves = 4;
 static constexpr uint8_t kMaxHarmonics = 16;
 static constexpr uint8_t kMaxRoutes = 24;
-static constexpr uint8_t kMaxEqBands = 3;
+// Six bands: a driver in a sealed chamber behind a two-stage cone has more
+// than three things wrong with it, and the biquads were already there.
+static constexpr uint8_t kMaxEqBands = 6;
+// Saved named voicings. A/B comparison lives in the browser - it is a working
+// session tool, not something the instrument has to remember.
+static constexpr uint8_t kMaxVoicings = 4;
+// Breakpoints of the register compensation curves.
+static constexpr uint8_t kRegisterPoints = 5;
 static constexpr uint8_t kNameLen = 32;
 
 // ---------------------------------------------------------------------------
@@ -62,7 +69,8 @@ enum class SynthEngineType : uint8_t {
     SINE = 0,
     ADDITIVE,   // reference engine for the trumpet
     WAVETABLE,
-    HYBRID      // additive + wavetable cross-fade
+    HYBRID,     // additive + wavetable cross-fade
+    BRASS_EXCITER   // EXPERIMENTAL non-linear exciter, see docs/AUDIO.md
     // SAMPLE is intentionally absent: the storage backend is not implemented
     // yet and the project rule is to never expose a non-functional option.
 };
@@ -161,6 +169,85 @@ struct LimiterConfig {
     float hardCeiling = 0.985f;   // absolute clamp, 0..1
 };
 
+// One breakpoint of the register compensation. The driver, the chamber and
+// the cone do not have a flat response, and correcting that with the master EQ
+// wrecks the timbre; this corrects level and brightness as a function of the
+// note instead.
+struct RegisterPoint {
+    uint8_t note = 60;
+    float gainDb = 0.0f;
+    float brightness = 0.0f;   // -1..+1, offset added to the blow amount
+};
+
+// EXPERIMENTAL. A light non-linear exciter rather than a physical model: the
+// real trumpet is the resonator, so there is nothing to simulate downstream of
+// the cone. Asymmetric waveshaping plus a pressure envelope is what turns a
+// harmonic stack into something that behaves like a lip reed.
+struct ExciterConfig {
+    float drive = 1.6f;          // pre-shaper gain
+    float asymmetry = 0.25f;     // -1..+1, even-harmonic content
+    float pressure = 0.7f;       // 0..1, static blowing pressure
+    float pressureToDrive = 0.9f;// how much the blow amount opens the shaper
+    float noiseAmount = 0.05f;   // air noise fed through the shaper
+    float transientMs = 18.0f;   // pressure rise at the start of a note
+};
+
+// Everything that changes the SOUND and nothing that changes SAFETY. This is
+// the only structure the live preview path is allowed to touch: impedance,
+// power limits, the hard ceiling, the pins and the backend all live elsewhere
+// and still go through validation and a reboot.
+struct VoicingConfig {
+    char name[kNameLen] = "Natural";
+    SynthEngineType engine = SynthEngineType::ADDITIVE;
+
+    EnvelopeConfig envelope;
+    VibratoConfig vibrato;
+    AdditiveConfig additive;
+    ExciterConfig exciter;
+
+    // Spectrum shaping. These were hard-coded in AdditiveSynth: the partial
+    // gains fall as harmonic^-(tilt-1), with `tilt` interpolated between the
+    // dark and the bright value by the blow amount. They are exactly what has
+    // to move to match an exciter to a cone.
+    float darkTilt = 2.6f;
+    float brightTilt = 0.6f;
+    float hybridMix = 0.6f;      // 1 = all additive, 0 = all wavetable
+
+    // Dynamics. Also previously hard-coded.
+    float velocityFloor = 0.25f;        // amplitude at velocity 1
+    float breathToVolume = 1.0f;        // CC2  -> level
+    float expressionToVolume = 1.0f;    // CC11 -> level
+    float aftertouchToBrightness = 0.25f;
+    float aftertouchToVolume = 0.0f;
+
+    uint8_t pitchBendRangeSemitones = 2;
+
+    // Tone. The high pass is in AudioConfig because the protection stage owns
+    // its floor; these are the bands on top of it.
+    EqBand eq[kMaxEqBands] = {{220.0f, 0.0f, 0.8f, false},
+                              {480.0f, 0.0f, 0.9f, false},
+                              {900.0f, 0.0f, 0.9f, false},
+                              {1800.0f, 0.0f, 0.9f, false},
+                              {3200.0f, 0.0f, 0.9f, false},
+                              {6400.0f, 0.0f, 0.8f, false}};
+
+    // Register compensation, interpolated between the breakpoints.
+    RegisterPoint registerCurve[kRegisterPoints] = {{52, 0.0f, 0.0f},
+                                                    {60, 0.0f, 0.0f},
+                                                    {67, 0.0f, 0.0f},
+                                                    {72, 0.0f, 0.0f},
+                                                    {86, 0.0f, 0.0f}};
+
+    float outputTrimDb = 0.0f;   // before the limiter, never past it
+};
+
+// The named voicings the instrument remembers. Separate from the hardware
+// presets on purpose: one cone, several sounds.
+struct VoicingLibrary {
+    uint8_t count = 0;
+    VoicingConfig items[kMaxVoicings];
+};
+
 struct AudioConfig {
     AudioBackendType backend = AudioBackendType::PCM5102A;
     uint32_t sampleRate = 48000;
@@ -168,22 +255,18 @@ struct AudioConfig {
     uint16_t blockSize = 128;       // frames per DSP block
     uint8_t dmaBuffers = 6;
     float masterVolume = 0.75f;     // 0..1
-    SynthEngineType engine = SynthEngineType::ADDITIVE;
-    uint8_t pitchBendRangeSemitones = 2;
     I2sPins i2s;
     I2cPins i2c;                    // codec control bus (ES8388/WM8960/TAS5760)
     uint8_t codecAddress = 0x10;
     int8_t sdModePin = -1;          // MAX98357A SD / TAS5760 SPK_SD
     int8_t internalDacChannel = 1;  // ESP32 classic: 1 = GPIO25, 2 = GPIO26
     float highPassHz = 120.0f;
-    EqBand eq[kMaxEqBands] = {{220.0f, 0.0f, 0.8f, false},
-                              {900.0f, 0.0f, 0.9f, false},
-                              {3200.0f, 0.0f, 0.9f, false}};
-    EnvelopeConfig envelope;
-    VibratoConfig vibrato;
-    AdditiveConfig additive;
     LimiterConfig limiter;
     bool startupMute = true;
+    // Program Change selects a saved voicing instead of being ignored. Off by
+    // default: a sequencer that sends bank changes should not silently change
+    // the sound of the instrument.
+    bool programChangeSelectsVoicing = false;
 };
 
 struct AmplifierConfig {
@@ -411,6 +494,11 @@ struct InstrumentConfiguration {
     SystemConfig system;
     WifiConfig wifi;
     AudioConfig audio;
+    // The live sound, and the named voicings the instrument remembers. Kept
+    // beside `audio` rather than inside it, because this is the half a preview
+    // is allowed to replace at runtime and `audio` is not.
+    VoicingConfig voicing;
+    VoicingLibrary voicings;
     AmplifierConfig amplifier;
     SpeakerConfig speaker;
     AcousticConfig acoustic;

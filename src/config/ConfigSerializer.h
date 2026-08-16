@@ -31,6 +31,12 @@ bool configFromJson(JsonObjectConst root, InstrumentConfiguration& cfg);
 // saving it must not wipe the ones already stored.
 void preserveSecrets(InstrumentConfiguration& cfg, const InstrumentConfiguration& previous);
 
+// A voicing on its own.  Exposed because the live preview path speaks in
+// voicings, not in whole configurations: /api/audio/preview reads one out of
+// the request body and /api/voicings writes them back.
+void writeVoicing(JsonObject o, const VoicingConfig& voicing);
+void readVoicing(JsonObjectConst o, VoicingConfig& voicing);
+
 // Convenience helpers used by the REST API.
 size_t serializeConfig(const InstrumentConfiguration& cfg, char* out, size_t outSize,
                        SecretPolicy secrets = SecretPolicy::REDACT);

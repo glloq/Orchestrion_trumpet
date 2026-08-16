@@ -197,7 +197,7 @@ Once it has joined your own Wi-Fi it is also reachable as
 
 ## Web configuration
 
-`Play · Configure · Wiring`, plus one settings modal
+`Play · Configure · Sound Lab · Wiring`, plus one settings modal
 (`Device · MIDI · Audio · Pistons · Diagnostics · Firmware`).
 
 ![Play](img/screenshots/play.png)
@@ -217,6 +217,28 @@ logic-level MOSFETs, fuse, separate actuator supply, hardware emergency stop).
 Nothing is assumed: what you have not declared stays `unverified`.
 
 ![Wiring](img/screenshots/wiring.png)
+
+### Sound Lab
+
+Voicing an instrument is a session, not a settings page, so it gets its own
+view and everything on it is **live**: a slider posts to `/api/audio/preview`,
+the firmware drops the voicing into a lock-free mailbox and the audio task
+picks it up at the start of the next block — about 2.7 ms. Nothing is saved and
+nothing reboots until you say so.
+
+![Sound Lab](img/screenshots/soundlab-quick.png)
+
+Quick Tune gives seven musical macros; Voicing exposes the 16 harmonic levels,
+the spectral tilts, the dynamics weights, six EQ bands and the register
+compensation curves; Expert has the experimental brass exciter and the whole
+voicing as JSON. **A** and **B** are two complete voicings you can switch
+between instantly — the only reliable way to tell, after twenty minutes of
+tuning, whether the sound is actually better.
+
+The split between *sound* and *safety* is enforced by construction: the live
+path deserialises into a `VoicingConfig`, and speaker impedance, power ratings,
+the protection limit, the hard ceiling and the pins are simply not members of
+it. They still go through validation and a reboot.
 
 Locked out of the network? Hold the board's **BOOT button for two seconds** and
 the hotspot comes back up. Wi-Fi passwords live on the device and are never

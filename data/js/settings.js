@@ -269,7 +269,8 @@ const Settings = (() => {
         { maxlength: 31 }), 'How the instrument appears to a BLE MIDI host.'),
       UI.field('Pitch bend range', UI.select(
         [1, 2, 3, 12].map((n) => ({ value: String(n), label: '± ' + n + ' semitones' })),
-        String(cfg().audio.pitchBendRange), (v) => set('audio.pitchBendRange', parseInt(v, 10)))),
+        String(cfg().voicing.pitchBendRange), (v) => set('voicing.pitchBendRange', parseInt(v, 10))),
+        'Also settable per voicing in Sound Lab, and overridable at runtime by RPN 0.'),
       UI.el('div', { class: 'field' }, [
         UI.el('label', { text: 'Loops' }),
         UI.toggle('Suppress MIDI loops', m.suppressLoops, (v) => set('midi.suppressLoops', v))
@@ -425,47 +426,26 @@ const Settings = (() => {
         + 'disabled; only the soft limiter can.')
     ]));
 
+    // The sound itself lives in Sound Lab, where it can be changed live and
+    // compared A/B. Duplicating a handful of its parameters here would mean
+    // two places to edit one thing, and only one of them audible immediately.
     body.appendChild(UI.el('div', { class: 'section-title', text: 'Sound' }));
-    body.appendChild(UI.el('div', { class: 'form-grid' }, [
-      UI.field('Generator', UI.select([
-        { value: 'ADDITIVE', label: 'Additive — recommended' },
-        { value: 'WAVETABLE', label: 'Wavetable — cheaper on CPU' },
-        { value: 'HYBRID', label: 'Hybrid' },
-        { value: 'SINE', label: 'Sine — test tone' }
-      ], a.engine, (v) => set('audio.engine', v))),
-      UI.field('Harmonics', UI.number(a.additive.harmonicCount,
-        (v) => set('audio.additive.harmonicCount', v), { min: 1, max: 16 })),
-      UI.field('Vibrato source', UI.select([
-        { value: 'CC1', label: 'Modulation wheel (CC1)' },
-        { value: 'AFTERTOUCH', label: 'Channel pressure' },
-        { value: 'AUTOMATIC', label: 'Always on' },
-        { value: 'OFF', label: 'Off' }
-      ], a.vibrato.source, (v) => set('audio.vibrato.source', v)))
-    ]));
+    body.appendChild(UI.readout('Current voicing',
+      UI.el('span', { class: 'v', text: (cfg().voicing && cfg().voicing.name) || 'Natural' }),
+      UI.el('button', { class: 'btn small primary', text: 'Open Sound Lab',
+                        onclick: () => { Settings.close(); App.navigate('soundlab'); } })));
+    body.appendChild(UI.el('p', { class: 'help',
+      text: 'Generator, harmonics, envelope, dynamics, EQ and register '
+          + 'compensation are all in Sound Lab. They apply on the next audio '
+          + 'block instead of needing a save and a reboot, which is the only '
+          + 'way to voice an instrument by ear.' }));
 
-    body.appendChild(UI.disclosure('Envelope and vibrato', () => {
-      const wrap = UI.el('div', { class: 'form-grid' }, [
-        UI.field('Attack (ms)', UI.number(a.envelope.attackMs,
-          (v) => set('audio.envelope.attackMs', v), { min: 1, max: 300 })),
-        UI.field('Decay (ms)', UI.number(a.envelope.decayMs,
-          (v) => set('audio.envelope.decayMs', v), { min: 1, max: 800 })),
-        UI.field('Sustain', UI.number(a.envelope.sustain,
-          (v) => set('audio.envelope.sustain', v), { min: 0, max: 1, step: 0.01 })),
-        UI.field('Release (ms)', UI.number(a.envelope.releaseMs,
-          (v) => set('audio.envelope.releaseMs', v), { min: 1, max: 1200 })),
-        UI.field('Attack noise', UI.number(a.envelope.attackNoise,
-          (v) => set('audio.envelope.attackNoise', v), { min: 0, max: 0.6, step: 0.01 })),
-        UI.field('Breath noise', UI.number(a.envelope.breathNoise,
-          (v) => set('audio.envelope.breathNoise', v), { min: 0, max: 0.3, step: 0.01 })),
-        UI.field('Vibrato rate (Hz)', UI.number(a.vibrato.frequencyHz,
-          (v) => set('audio.vibrato.frequencyHz', v), { min: 1, max: 12, step: 0.1 })),
-        UI.field('Vibrato depth (cents)', UI.number(a.vibrato.depthCents,
-          (v) => set('audio.vibrato.depthCents', v), { min: 0, max: 100 })),
-        UI.field('Vibrato delay (ms)', UI.number(a.vibrato.delayMs,
-          (v) => set('audio.vibrato.delayMs', v), { min: 0, max: 1500 }))
-      ]);
-      return wrap;
-    }));
+    body.appendChild(UI.el('div', { class: 'section-title', text: 'Program Change' }));
+    body.appendChild(UI.toggle('Program Change selects a saved voicing',
+      !!a.programChangeSelectsVoicing, (v) => set('audio.programChangeSelectsVoicing', v)));
+    body.appendChild(UI.el('p', { class: 'help',
+      text: 'Off by default: a sequencer sending bank changes should not '
+          + 'silently change the sound of the instrument.' }));
 
     body.appendChild(UI.disclosure('Chamber, cone and leadpipe', () => acousticEditor()));
 

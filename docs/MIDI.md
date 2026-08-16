@@ -150,12 +150,15 @@ behind the trumpet stops too.
 | CC 7 — Volume | Channel volume. |
 | CC 11 — Expression | Scales the level and tilts the harmonic content. |
 | Pitch Bend | ±1, ±2, ±3 or ±12 semitones (default ±2). |
-| Channel Pressure | Alternative vibrato source, and a small contribution to brightness. |
+| Channel Pressure | Alternative vibrato source, and a weighted contribution to brightness and level (`aftertouchToBrightness`, `aftertouchToVolume`). |
+| CC 64 — Sustain | Hold pedal, ≥ 64 is down. A note whose key has come up keeps sounding, and its valves stay down, until the pedal is released. |
+| RPN 0 — Pitch Bend Sensitivity | CC 101 / 100 / 6. A sequencer that sets its own bend range is obeyed; the voicing's own range is the value until it does. Other RPNs are ignored rather than mistaken for RPN 0. |
+| Program Change | Selects a saved voicing — **only** if the user turns the option on. A sequencer sending bank changes should not silently change the sound of the instrument. |
 | CC 120 — All Sound Off | Immediate silence, notes cleared, valves released. |
 | CC 121 — Reset Controllers | Controllers back to their defaults. |
 | CC 123 — All Notes Off | Notes released, valves released. |
 | Real-time (clock, start, stop, …) | Parsed and routed; the engines ignore them. |
-| Program Change, SysEx | Parsed and routed; the sound engine ignores them. The parser has a 256 byte SysEx buffer and counts what it had to drop. USB-MIDI splits SysEx across 4-byte packets: those payload bytes are handed to the same parser the DIN port uses (code index numbers 0x4–0x7), so reassembly, the buffer cap and the overflow counter are shared rather than duplicated. |
+| SysEx | Parsed and routed; the sound engine ignores them. The parser has a 256 byte SysEx buffer and counts what it had to drop. USB-MIDI splits SysEx across 4-byte packets: those payload bytes are handed to the same parser the DIN port uses (code index numbers 0x4–0x7), so reassembly, the buffer cap and the overflow counter are shared rather than duplicated. |
 | MPE | Not implemented. The architecture is extensible — per-note pitch would require a polyphonic voice allocator — but nothing pretends to support it today. |
 
 ---

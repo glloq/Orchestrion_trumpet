@@ -40,6 +40,11 @@ static constexpr uint8_t Modulation = 1;
 static constexpr uint8_t Breath = 2;
 static constexpr uint8_t Volume = 7;
 static constexpr uint8_t Expression = 11;
+static constexpr uint8_t Sustain = 64;        // hold pedal, >= 64 is down
+static constexpr uint8_t DataEntryMsb = 6;    // RPN / NRPN value
+static constexpr uint8_t DataEntryLsb = 38;
+static constexpr uint8_t RpnLsb = 100;
+static constexpr uint8_t RpnMsb = 101;
 static constexpr uint8_t AllSoundOff = 120;
 static constexpr uint8_t ResetControllers = 121;
 static constexpr uint8_t AllNotesOff = 123;

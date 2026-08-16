@@ -36,8 +36,11 @@ void AdditiveSynth::updateGains() {
     const float blow = clampValue(brightness_ +
                                       cfg_.pitchBrightness * (pitchNorm_ - 0.5f) * 0.5f,
                                   0.0f, 1.0f);
-    // Roll-off exponent: strong tilt when soft, nearly flat when loud.
-    const float tilt = 2.6f - 2.0f * blow;
+    // Roll-off exponent, interpolated between the dark and the bright value:
+    // strong tilt when soft, nearly flat when loud. These two numbers used to
+    // be literals here; they are exactly what has to move to match an exciter
+    // to a particular cone, so they are configuration now.
+    const float tilt = darkTilt_ + (brightTilt_ - darkTilt_) * blow;
 
     for (uint8_t i = 0; i < cfg_.harmonicCount; ++i) {
         const float harmonicNumber = static_cast<float>(i + 1);
