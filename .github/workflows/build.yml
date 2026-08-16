@@ -26,7 +26,21 @@ jobs:
             ~/.cache/pip
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        # click 8.2 changed ParamType.get_metavar() to take a `ctx` argument.
+        # The esptool bundled in tool-esptoolpy still calls the old signature,
+        # so anything that runs esptool - including `buildfs` and the bootloader
+        # step of an ordinary build - dies with:
+        #
+        #   TypeError: ParamType.get_metavar() missing 1 required positional
+        #              argument: 'ctx'
+        #
+        # PlatformIO's own requirement is only `click<8.4`, which still lets
+        # 8.2 and 8.3 in, so the pin has to be explicit and has to come after
+        # platformio is installed. Remove it once tool-esptoolpy ships an
+        # esptool built against click 8.2.
+        run: |
+          pip install --upgrade platformio
+          pip install "click<8.2"
       - name: Build
         run: pio run -e ${{ matrix.environment }}
       - name: Build the LittleFS image
@@ -48,6 +62,11 @@ jobs:
             ~/.cache/pip
           key: pio-native-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        # Same pin as above. The native environment does not run esptool, but
+        # keeping the two jobs on the same toolchain means a failure here is
+        # never explained by a different click.
+        run: |
+          pip install --upgrade platformio
+          pip install "click<8.2"
       - name: Run the tests
         run: pio test -e native
